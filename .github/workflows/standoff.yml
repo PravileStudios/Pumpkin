@@ -1,0 +1,48 @@
+name: Standoff build
+
+on:
+  push:
+    branches: [standoff]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    env:
+      RUSTFLAGS: -C target-cpu=x86-64-v3
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - run: rustup update stable && rustup default stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: prod-x86-64-v3
+
+      - name: Build pumpkin (prod profile)
+        run: cargo build --profile prod -p pumpkin
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp target/prod/pumpkin dist/pumpkin-linux-x86_64-v3
+          sha256sum dist/pumpkin-linux-x86_64-v3 > dist/pumpkin-linux-x86_64-v3.sha256
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pumpkin-linux-x86_64-v3
+          path: dist/*
+          compression-level: 9
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="standoff-${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}"
+          gh release create "$tag" dist/* --title "$tag" --notes "Pumpkin ${GITHUB_SHA} with Standoff patches (prod profile, x86-64-v3, ubuntu-22.04)" --target "$GITHUB_SHA"

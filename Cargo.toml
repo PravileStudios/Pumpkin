@@ -151,6 +151,11 @@ codegen-units = 16
 [profile.release.package.pumpkin-wasm-host-v0_2]
 codegen-units = 16
 
+[profile.prod]
+inherits = "release"
+lto = "thin"
+codegen-units = 16
+
 [profile.bench]
 debug = true
 
