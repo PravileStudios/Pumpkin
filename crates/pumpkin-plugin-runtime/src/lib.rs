@@ -79,6 +79,26 @@ mod tests {
         }
     }
 
+    struct LateRegistrationSpawner {
+        runtime: tokio::runtime::Handle,
+    }
+
+    impl RuntimeSpawner for LateRegistrationSpawner {
+        fn spawn(&self, task: SpawnFuture) -> Result<(), SpawnError> {
+            drop(self.runtime.spawn(task));
+            Ok(())
+        }
+
+        fn spawn_blocking(
+            &self,
+            task: Box<dyn FnOnce() + Send + 'static>,
+        ) -> Result<(), SpawnError> {
+            drop(self.runtime.spawn_blocking(task));
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            Ok(())
+        }
+    }
+
     struct DroppingSpawner;
 
     impl RuntimeSpawner for DroppingSpawner {
@@ -128,6 +148,21 @@ mod tests {
     impl TestStore {
         async fn new(store: Store<TestHostState>, mode: StoreMode) -> Self {
             Self::with_policy(store, LegacySyncReentry::new(), mode).await
+        }
+
+        async fn with_late_spawner(store: Store<TestHostState>) -> Self {
+            let spawner = Arc::new(LateRegistrationSpawner {
+                runtime: tokio::runtime::Handle::current(),
+            });
+            let executor = LegacyStore::start(
+                store,
+                LegacySyncReentry::new(),
+                spawner,
+                StoreMode::Sequential,
+            )
+            .await
+            .expect("start test Store driver");
+            Self(Arc::new(executor))
         }
 
         async fn with_policy(
@@ -789,7 +824,7 @@ mod tests {
 
     /// Mirrors synchronous game methods that call `fire_blocking` from a
     /// blocking worker while the host import keeps the active store pumpable.
-    async fn blocking_host_operation_propagates_the_reentry_chain() {
+    async fn blocking_host_operation_propagates_the_reentry_chain_with(late: bool) {
         let engine = test_engine(StoreMode::Sequential);
         let component = Component::new(&engine, sync_reentry_component()).expect("test component");
 
@@ -845,7 +880,11 @@ mod tests {
             .expect("run export");
         assert!(run_slot.set(run).is_ok());
 
-        let driver = TestStore::new(store, StoreMode::Sequential).await;
+        let driver = if late {
+            TestStore::with_late_spawner(store).await
+        } else {
+            TestStore::new(store, StoreMode::Sequential).await
+        };
         assert!(driver_slot.set(driver.clone()).is_ok());
 
         timeout(
@@ -863,6 +902,22 @@ mod tests {
             .shutdown(|_| Box::pin(async move { Ok(()) }))
             .await
             .expect("shut down test store");
+    }
+
+    async fn blocking_host_operation_propagates_the_reentry_chain() {
+        blocking_host_operation_propagates_the_reentry_chain_with(false).await;
+    }
+
+    /// The blocking operation fires its callback before `pump_blocking` resumes,
+    /// so the reentry route must already be registered when it is spawned.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn blocking_callback_before_pump_starts_reenters() {
+        timeout(
+            Duration::from_secs(10),
+            blocking_host_operation_propagates_the_reentry_chain_with(true),
+        )
+        .await
+        .expect("blocking callback fired before the pump started deadlocked");
     }
 
     async fn unrelated_guest_call_waits_for_the_active_chain() {
