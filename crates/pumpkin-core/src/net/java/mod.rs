@@ -230,6 +230,22 @@ impl JavaClient {
         // Skip the immediate first tick so we don't send a keep-alive the exact millisecond they join
         keep_alive_interval.tick().await;
 
+        let (packet_send, mut packet_recv) = tokio::sync::mpsc::channel(64);
+        let reader_close = self.close_token.clone();
+        self.spawn_task(async move {
+            loop {
+                tokio::select! {
+                    () = reader_close.cancelled() => break,
+                    result = network_reader.get_raw_packet() => {
+                        let failed = result.is_err();
+                        if packet_send.send(result).await.is_err() || failed {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
         loop {
             tokio::select! {
                 // KEEP-ALIVE TIMER
@@ -278,9 +294,18 @@ impl JavaClient {
                 }
 
                 // INCOMING PACKETS
-                packet_opt = self.get_packet_with_reader(&mut network_reader) => {
-                    let Some(packet) = packet_opt else {
-                        break;
+                packet_result = packet_recv.recv() => {
+                    let packet = match packet_result {
+                        Some(Ok(packet)) => packet,
+                        Some(Err(err)) => {
+                            if !matches!(err, PacketDecodeError::ConnectionClosed) {
+                                debug!("Failed to decode packet from client {}: {}", self.id, err);
+                                let text = format!("Error while reading incoming packet {err}");
+                                self.kick(TextComponent::text(text)).await;
+                            }
+                            break;
+                        }
+                        None => break,
                     };
                     self.last_packet_time.store(Instant::now());
 
