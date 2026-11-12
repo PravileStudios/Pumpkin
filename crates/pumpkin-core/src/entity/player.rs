@@ -1223,7 +1223,7 @@ impl Player {
         *guard = display_name;
         // Update the tab list for everyone
         let world = self.world();
-        world.broadcast_packet_all(&CPlayerInfoUpdate::new(
+        world.broadcast_packet_all_worlds(&CPlayerInfoUpdate::new(
             PlayerInfoFlags::UPDATE_DISPLAY_NAME.bits(),
             &[pumpkin_protocol::java::client::play::Player {
                 uuid: self.gameprofile.id,
@@ -1246,7 +1246,7 @@ impl Player {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         *guard = name;
         let world = self.world();
-        world.broadcast_packet_all(&CPlayerInfoUpdate::new(
+        world.broadcast_packet_all_worlds(&CPlayerInfoUpdate::new(
             PlayerInfoFlags::UPDATE_DISPLAY_NAME.bits(),
             &[pumpkin_protocol::java::client::play::Player {
                 uuid: self.gameprofile.id,
@@ -1258,7 +1258,7 @@ impl Player {
     pub fn set_tab_list_order(&self, order: i32) {
         self.tab_list_order.store(order, Ordering::Relaxed);
         let world = self.world();
-        world.broadcast_packet_all(&CPlayerInfoUpdate::new(
+        world.broadcast_packet_all_worlds(&CPlayerInfoUpdate::new(
             PlayerInfoFlags::UPDATE_LIST_PRIORITY.bits(),
             &[pumpkin_protocol::java::client::play::Player {
                 uuid: self.gameprofile.id,
@@ -1270,7 +1270,7 @@ impl Player {
     pub fn set_tab_list_latency(&self, latency: i32) {
         self.tab_list_latency.store(latency, Ordering::Relaxed);
         let world = self.world();
-        world.broadcast_packet_all(&CPlayerInfoUpdate::new(
+        world.broadcast_packet_all_worlds(&CPlayerInfoUpdate::new(
             PlayerInfoFlags::UPDATE_LATENCY.bits(),
             &[pumpkin_protocol::java::client::play::Player {
                 uuid: self.gameprofile.id,
@@ -1282,7 +1282,7 @@ impl Player {
     pub fn set_tab_list_listed(&self, listed: bool) {
         self.tab_list_listed.store(listed, Ordering::Relaxed);
         let world = self.world();
-        world.broadcast_packet_all(&CPlayerInfoUpdate::new(
+        world.broadcast_packet_all_worlds(&CPlayerInfoUpdate::new(
             PlayerInfoFlags::UPDATE_LISTED.bits(),
             &[pumpkin_protocol::java::client::play::Player {
                 uuid: self.gameprofile.id,
@@ -5631,7 +5631,7 @@ impl Player {
             .entity
             .world
             .load()
-            .broadcast_packet_all(&CPlayerInfoUpdate::new(
+            .broadcast_packet_all_worlds(&CPlayerInfoUpdate::new(
                 PlayerInfoFlags::UPDATE_GAME_MODE.bits(),
                 &[pumpkin_protocol::java::client::play::Player {
                     uuid: self.gameprofile.id,

@@ -1106,6 +1106,44 @@ impl World {
         }
     }
 
+    pub fn broadcast_packet_all_worlds<P: ClientPacket>(&self, packet: &P) {
+        match self.server.upgrade() {
+            Some(server) => server.broadcast_packet_all(packet),
+            None => self.broadcast_packet_all(packet),
+        }
+    }
+
+    pub fn broadcast_editioned_all_worlds<J: ClientPacket, B: BClientPacket>(
+        &self,
+        je_packet: &J,
+        be_packet: &B,
+    ) {
+        match self.server.upgrade() {
+            Some(server) => {
+                for world in server.worlds.load().iter() {
+                    world.broadcast_editioned(je_packet, be_packet);
+                }
+            }
+            None => self.broadcast_editioned(je_packet, be_packet),
+        }
+    }
+
+    pub fn broadcast_editioned_except_all_worlds<J: ClientPacket, B: BClientPacket>(
+        &self,
+        except: &[uuid::Uuid],
+        je_packet: &J,
+        be_packet: &B,
+    ) {
+        match self.server.upgrade() {
+            Some(server) => {
+                for world in server.worlds.load().iter() {
+                    world.broadcast_packet_except_editioned(except, je_packet, be_packet);
+                }
+            }
+            None => self.broadcast_packet_except_editioned(except, je_packet, be_packet),
+        }
+    }
+
     /// Broadcasts a packet to all connected players within the world.
     /// Please avoid this as we want to replace it with `broadcast_editioned`
     ///
@@ -3447,7 +3485,7 @@ impl World {
         };
 
         let gamemode = player.gamemode.load();
-        self.broadcast_packet_except_editioned(
+        self.broadcast_editioned_except_all_worlds(
             &[gameprofile.id],
             &CPlayerInfoUpdate::new(
                 (PlayerInfoFlags::ADD_PLAYER
@@ -3743,7 +3781,7 @@ impl World {
         }];
         let player_info_update = CPlayerInfoUpdate::new(Self::TAB_LIST_ADD_FLAGS, &java_player);
 
-        self.broadcast_editioned(&player_info_update, &bedrock_player_list);
+        self.broadcast_editioned_all_worlds(&player_info_update, &bedrock_player_list);
 
         // If the player has a custom tab_list_name, send an update for it
         if let Some(tab_list_name) = player.get_tab_list_name() {
@@ -3752,7 +3790,7 @@ impl World {
                 uuid: gameprofile.id,
                 actions: &actions,
             }];
-            self.broadcast_packet_all(&CPlayerInfoUpdate::new(
+            self.broadcast_packet_all_worlds(&CPlayerInfoUpdate::new(
                 PlayerInfoFlags::UPDATE_DISPLAY_NAME.bits(),
                 &java_player,
             ));
@@ -3761,7 +3799,10 @@ impl World {
         // Here, we send all the infos of players who already joined.
         let mut players_tab_list_names = Vec::new();
         {
-            let players = self.players.load();
+            let players = self.server.upgrade().map_or_else(
+                || self.players.load().iter().cloned().collect::<Vec<_>>(),
+                |server| server.get_all_players(),
+            );
             let mut data_to_process = Vec::new();
             for p in players
                 .iter()
@@ -5260,7 +5301,12 @@ impl World {
                 }],
             };
 
-            self.broadcast_editioned(&CRemovePlayerInfo::new(&[uuid]), &bedrock_remove_player);
+            if fire_event {
+                self.broadcast_editioned_all_worlds(
+                    &CRemovePlayerInfo::new(&[uuid]),
+                    &bedrock_remove_player,
+                );
+            }
 
             self.broadcast_editioned(
                 &CRemoveEntities::new(&[entity_id.into()]),
