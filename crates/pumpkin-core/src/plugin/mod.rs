@@ -20,6 +20,7 @@ use tracing::{debug, error, info, warn};
 
 pub mod api;
 pub mod cache;
+pub mod fail_closed;
 pub mod loader;
 /// Constants for plugin permissions.
 ///

@@ -230,6 +230,7 @@ impl PluginRuntime {
             binding_language,
             store,
             task_scheduler: Arc::clone(&self.task_scheduler),
+            fail_closed: std::sync::OnceLock::new(),
         });
         let weak_plugin = Arc::downgrade(&wasm_plugin);
         wasm_plugin
@@ -412,6 +413,9 @@ pub async fn on_load(
     let metadata = context.get_metadata();
     let plugin_config = &context.server.advanced_config.plugins;
     let plugin_override = plugin_config.overrides.get(&metadata.name);
+    if plugin_override.is_some_and(|o| o.fail_closed) {
+        let _ = wasm_plugin.fail_closed.set(metadata.name.clone());
+    }
 
     let is_blocked = |p: &str| {
         plugin_config.blocked_permissions.iter().any(|b| b == p)

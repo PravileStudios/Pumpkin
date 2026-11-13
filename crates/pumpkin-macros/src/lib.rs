@@ -18,6 +18,20 @@ pub fn event(item: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(item as DeriveInput);
     let name = &ast.ident;
     let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
+    let cancellable = match &ast.data {
+        syn::Data::Struct(data) => data
+            .fields
+            .iter()
+            .any(|f| f.ident.as_ref().is_some_and(|i| i == "cancelled")),
+        _ => false,
+    };
+    let as_cancellable = cancellable.then(|| {
+        quote! {
+            fn as_cancellable_mut(&mut self) -> Option<&mut dyn crate::plugin::Cancellable> {
+                Some(self)
+            }
+        }
+    });
 
     quote! {
         impl #impl_generics crate::plugin::Payload for #name #ty_generics #where_clause {
@@ -36,6 +50,8 @@ pub fn event(item: TokenStream) -> TokenStream {
             fn as_any(&self) -> &dyn std::any::Any {
                 self
             }
+
+            #as_cancellable
         }
     }
     .into()

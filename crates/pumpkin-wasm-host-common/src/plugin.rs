@@ -1,4 +1,7 @@
-use std::{any::Any, sync::Arc};
+use std::{
+    any::Any,
+    sync::{Arc, OnceLock},
+};
 use thiserror::Error;
 
 use crate::{concurrent_store::LegacyStore, scheduler::TaskScheduler};
@@ -228,6 +231,9 @@ pub struct WasmPlugin {
     pub binding_language: Option<String>,
     pub store: LegacyStore,
     pub task_scheduler: Arc<TaskScheduler>,
+    /// The plugin's name when its `fail_closed` override is on: a failed handler then cancels
+    /// its event and disconnects the player of a join or received packet.
+    pub fail_closed: OnceLock<String>,
 }
 
 impl WasmPlugin {

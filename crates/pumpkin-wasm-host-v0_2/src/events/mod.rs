@@ -12,7 +12,7 @@ use wasmtime::component::Resource;
 use crate::pumpkin;
 use pumpkin_core::{
     entity::player::Player,
-    plugin::{BoxFuture, EventHandler, Payload},
+    plugin::{BoxFuture, EventHandler, Payload, fail_closed},
     server::Server,
     world::World,
 };
@@ -320,6 +320,11 @@ impl<E: Payload + ToFromWasmEvent + Clone + 'static> EventHandler<E> for WasmPlu
             let pending = Box::new(NotifiedEvent(event.clone()));
             if let Err(error) = self.dispatch(server.clone(), pending).await {
                 tracing::error!(handler_id = self.handler_id, %error, "Wasm event handler failed");
+                if let Some(plugin) = self.plugin.fail_closed.get()
+                    && let Some(player) = fail_closed::player_to_disconnect(event)
+                {
+                    fail_closed::disconnect(&player, plugin);
+                }
             }
         })
     }
@@ -343,6 +348,11 @@ impl<E: Payload + ToFromWasmEvent + Clone + 'static> EventHandler<E> for WasmPlu
                         %error,
                         "Blocking Wasm event handler failed"
                     );
+                    if let Some(plugin) = self.plugin.fail_closed.get()
+                        && let Some(player) = fail_closed::contain(event)
+                    {
+                        fail_closed::disconnect(&player, plugin);
+                    }
                 }
             }
         })

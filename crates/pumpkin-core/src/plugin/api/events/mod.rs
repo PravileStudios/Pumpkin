@@ -46,6 +46,11 @@ pub trait Payload: Send + Sync {
     /// # Returns
     /// A mutable reference to the payload as a `dyn Any` trait object.
     fn as_any_mut(&mut self) -> &mut dyn Any;
+
+    /// The payload as a cancellable event, when it is one.
+    fn as_cancellable_mut(&mut self) -> Option<&mut dyn Cancellable> {
+        None
+    }
 }
 
 /// Helper functions for safe downcasting of Payload implementations.

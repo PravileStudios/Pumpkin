@@ -40,6 +40,7 @@ pub struct PluginsConfig {
     /// allowed_permissions = ["fs:read:data", "fs:write:data"]
     /// blocked_permissions = ["network:outbound"]
     /// loopback_only = true
+    /// fail_closed = false
     ///
     /// [plugins.overrides.my_plugin.environment]
     /// MY_API_KEY = "secret_key"
@@ -87,6 +88,10 @@ pub struct PluginOverride {
     pub loopback_only: Option<bool>,
     /// Custom environment variables passed directly to this plugin's WASI environment.
     pub environment: HashMap<String, String>,
+    /// When a handler of this plugin fails or traps, cancel the event if it can be cancelled and
+    /// disconnect the player for a failed join or packet handler, instead of letting it through.
+    /// Meant for security plugins such as login plugins.
+    pub fail_closed: bool,
 }
 
 impl Default for PluginOverride {
@@ -99,6 +104,7 @@ impl Default for PluginOverride {
             blocked_permissions: Vec::new(),
             loopback_only: None,
             environment: HashMap::new(),
+            fail_closed: false,
         }
     }
 }
@@ -144,9 +150,13 @@ mod tests {
             allowed_permissions = ["network:tcp"]
             blocked_permissions = ["fs:write:data"]
             loopback_only = false
+            fail_closed = true
 
             [overrides.my_plugin.environment]
             API_KEY = "12345"
+
+            [overrides.other_plugin]
+            max_memory_mb = 64
         "#;
 
         let config: PluginsConfig = toml::from_str(toml_str).unwrap();
@@ -169,5 +179,7 @@ mod tests {
         assert_eq!(override_cfg.blocked_permissions, vec!["fs:write:data"]);
         assert_eq!(override_cfg.loopback_only, Some(false));
         assert_eq!(override_cfg.environment.get("API_KEY").unwrap(), "12345");
+        assert!(override_cfg.fail_closed);
+        assert!(!config.overrides.get("other_plugin").unwrap().fail_closed);
     }
 }
