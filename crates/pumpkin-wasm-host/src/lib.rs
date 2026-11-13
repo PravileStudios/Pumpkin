@@ -60,6 +60,10 @@ impl Plugin for WasmPluginHandle {
                 .flatten()
         })
     }
+
+    fn is_healthy(&self) -> bool {
+        !self.0.store.state().is_terminal()
+    }
 }
 
 pub struct WasmPluginLoader {

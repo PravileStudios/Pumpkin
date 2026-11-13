@@ -4,7 +4,9 @@ use std::{any::Any, fs, net::SocketAddr, path::Path, sync::Arc};
 use wasmtime::{Cache, CacheConfig, Engine, component::Component, component::Linker};
 use wasmtime_wasi::{FsPerms, WasiCtxBuilder, sockets::SocketAddrUse};
 
-use pumpkin_core::plugin::{Context, PluginMetadata, cache::calculate_hash_for_bytes, permissions};
+use pumpkin_core::plugin::{
+    Context, PluginMetadata, cache::calculate_hash_for_bytes, fail_closed, permissions,
+};
 use pumpkin_plugin_runtime::RuntimeSpawner;
 use pumpkin_wasm_host_common::{
     concurrent_store::{self, LegacySyncReentry, StoreMode},
@@ -418,8 +420,19 @@ pub async fn on_load(
     if let Some(ids) = plugin_override.and_then(|o| o.packet_ids.clone()) {
         let _ = wasm_plugin.packet_ids.set(ids);
     }
-    if plugin_override.is_some_and(|o| o.fail_closed) {
-        let _ = wasm_plugin.fail_closed.set(metadata.name.clone());
+    if plugin_override.is_some_and(|o| o.fail_closed)
+        && wasm_plugin.fail_closed.set(metadata.name.clone()).is_ok()
+    {
+        let mut driver = wasm_plugin.store.driver_join();
+        let server = Arc::downgrade(&context.server);
+        let name = metadata.name.clone();
+        tokio::spawn(async move {
+            if driver.wait().await.is_err()
+                && let Some(server) = server.upgrade()
+            {
+                fail_closed::disconnect_all(&server, &name);
+            }
+        });
     }
 
     let is_blocked = |p: &str| {

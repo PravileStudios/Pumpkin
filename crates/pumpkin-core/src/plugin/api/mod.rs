@@ -67,4 +67,10 @@ pub trait Plugin: Send + Sync + 'static {
     ) -> PluginFuture<'_, Result<Vec<u8>, String>> {
         Box::pin(async move { Err("This plugin cannot receive messages.".to_string()) })
     }
+
+    /// Whether the plugin can still handle calls. A Wasm plugin whose runtime stopped after a
+    /// trap reports false.
+    fn is_healthy(&self) -> bool {
+        true
+    }
 }

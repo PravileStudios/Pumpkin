@@ -1042,6 +1042,26 @@ impl PluginManager {
             .any(|p| p.metadata.name == name && p.is_active && p.instance.is_some())
     }
 
+    /// The first enabled `fail_closed` plugin that is not loaded, active and healthy. Joins are
+    /// denied while there is one.
+    #[must_use]
+    pub fn unavailable_fail_closed_plugin(
+        &self,
+        config: &pumpkin_config::plugins::PluginsConfig,
+    ) -> Option<String> {
+        let plugins = self
+            .plugins
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        fail_closed::first_unavailable(config, |name| {
+            plugins.iter().any(|p| {
+                p.metadata.name == name
+                    && p.is_active
+                    && p.instance.as_ref().is_some_and(|i| i.is_healthy())
+            })
+        })
+    }
+
     /// Get list of active plugins
     #[must_use]
     pub fn active_plugins(&self) -> Vec<PluginMetadata> {

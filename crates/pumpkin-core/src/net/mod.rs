@@ -366,6 +366,13 @@ pub async fn can_not_join(
         "[year]-[month]-[day] at [hour]:[minute]:[second] [offset_hour sign:mandatory]:[offset_minute]"
     );
 
+    if let Some(plugin) = server
+        .plugin_manager
+        .unavailable_fail_closed_plugin(&server.advanced_config.plugins)
+    {
+        return Some(crate::plugin::fail_closed::unavailable_message(&plugin));
+    }
+
     if server.is_player_online(profile) {
         return Some(TextComponent::text(ALREADY_CONNECTED));
     }
