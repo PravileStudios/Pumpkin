@@ -18,6 +18,17 @@ use pumpkin_util::translation::Locale;
 
 impl pumpkin::plugin::text::Host for PluginHostState {}
 
+fn update(
+    state: &mut PluginHostState,
+    res: &Resource<TextComponent>,
+    f: impl FnOnce(InternalTextComponent) -> InternalTextComponent,
+) -> wasmtime::Result<()> {
+    let slot = state.get_mut(res)?;
+    let current = std::mem::replace(slot, InternalTextComponent::text(""));
+    *slot = f(current);
+    Ok(())
+}
+
 impl pumpkin::plugin::text::HostTextComponent for PluginHostState {
     fn text(&mut self, plain: String) -> wasmtime::Result<Resource<TextComponent>> {
         let tc = InternalTextComponent::text(plain);
@@ -129,9 +140,7 @@ impl pumpkin::plugin::text::HostTextComponent for PluginHostState {
         child: Resource<TextComponent>,
     ) -> wasmtime::Result<()> {
         let child_tc = self.take(child)?;
-        let parent = self.get_mut(&text_component)?;
-        *parent = parent.clone().add_child(child_tc);
-        Ok(())
+        update(self, &text_component, |tc| tc.add_child(child_tc))
     }
 
     fn add_text(
@@ -139,9 +148,7 @@ impl pumpkin::plugin::text::HostTextComponent for PluginHostState {
         text_component: Resource<TextComponent>,
         text: String,
     ) -> wasmtime::Result<()> {
-        let parent = self.get_mut(&text_component)?;
-        *parent = parent.clone().add_text(text);
-        Ok(())
+        update(self, &text_component, |tc| tc.add_text(text))
     }
 
     fn get_text(&mut self, text_component: Resource<TextComponent>) -> wasmtime::Result<String> {
@@ -180,9 +187,7 @@ impl pumpkin::plugin::text::HostTextComponent for PluginHostState {
         colors: Vec<NamedColor>,
     ) -> wasmtime::Result<()> {
         let mapped: Vec<_> = colors.into_iter().map(map_named_color).collect();
-        let parent = self.get_mut(&res)?;
-        *parent = parent.clone().gradient_named(&mapped);
-        Ok(())
+        update(self, &res, |tc| tc.gradient_named(&mapped))
     }
 
     fn gradient(
@@ -194,15 +199,11 @@ impl pumpkin::plugin::text::HostTextComponent for PluginHostState {
             .into_iter()
             .map(|c| color::RGBColor::new(c.r, c.g, c.b))
             .collect();
-        let parent = self.get_mut(&res)?;
-        *parent = parent.clone().gradient(&mapped);
-        Ok(())
+        update(self, &res, |tc| tc.gradient(&mapped))
     }
 
     fn rainbow(&mut self, res: Resource<TextComponent>) -> wasmtime::Result<()> {
-        let parent = self.get_mut(&res)?;
-        *parent = parent.clone().rainbow();
-        Ok(())
+        update(self, &res, InternalTextComponent::rainbow)
     }
 
     fn bold(&mut self, res: Resource<TextComponent>, value: bool) -> wasmtime::Result<()> {
@@ -381,5 +382,41 @@ const fn map_named_color(color: NamedColor) -> color::NamedColor {
         NamedColor::LightPurple => color::NamedColor::LightPurple,
         NamedColor::Yellow => color::NamedColor::Yellow,
         NamedColor::White => color::NamedColor::White,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pumpkin::plugin::text::HostTextComponent;
+
+    #[test]
+    fn builder_calls_edit_the_component_in_place() {
+        let mut state = PluginHostState::new();
+        let root = HostTextComponent::text(&mut state, "a".to_string()).expect("root");
+        for i in 0..300 {
+            let child = HostTextComponent::text(&mut state, i.to_string()).expect("child");
+            HostTextComponent::add_child(&mut state, Resource::new_borrow(root.rep()), child)
+                .expect("add child");
+        }
+        HostTextComponent::add_text(
+            &mut state,
+            Resource::new_borrow(root.rep()),
+            "z".to_string(),
+        )
+        .expect("add text");
+        let tc = state.get(&root).expect("get root");
+        assert_eq!(tc.0.extra.len(), 301);
+        let expected: String = std::iter::once("a".to_string())
+            .chain((0..300).map(|i| i.to_string()))
+            .chain(std::iter::once("z".to_string()))
+            .collect();
+        assert_eq!(tc.clone().get_text(), expected);
+
+        let word = HostTextComponent::text(&mut state, "abc".to_string()).expect("word");
+        HostTextComponent::rainbow(&mut state, Resource::new_borrow(word.rep())).expect("rainbow");
+        let tc = state.get(&word).expect("get word");
+        assert_eq!(tc.0.extra.len(), 3);
+        assert_eq!(tc.clone().get_text(), "abc");
     }
 }
