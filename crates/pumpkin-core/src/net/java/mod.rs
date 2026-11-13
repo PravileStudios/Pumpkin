@@ -211,6 +211,55 @@ impl JavaClient {
         self.player.store(Arc::new(Some(player)));
     }
 
+    /// Sends the next keep-alive, or kicks the client and returns false when it timed out.
+    async fn send_keep_alive(&self, timeout_duration: std::time::Duration) -> bool {
+        // Check if the client has timed out on keep-alive responses or no packet activity
+        let has_timed_out = {
+            let pending = self
+                .pending_keep_alives
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            pending
+                .iter()
+                .any(|(_, send_time)| send_time.elapsed() > timeout_duration)
+        } || (self.wait_for_keep_alive.load(Ordering::Relaxed)
+            && self.last_keep_alive_time.load().elapsed() > timeout_duration)
+            || (self.last_packet_time.load().elapsed() > timeout_duration);
+
+        if has_timed_out {
+            self.kick(pumpkin_macros::translate_cross!(
+                translation::java::DISCONNECT_TIMEOUT,
+                translation::bedrock::DISCONNECT_TIMEOUT
+            ))
+            .await;
+            return false;
+        }
+
+        let keep_alive_id = i64::from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as i32,
+        );
+
+        self.keep_alive_id.store(keep_alive_id);
+        self.wait_for_keep_alive.store(true, Ordering::Relaxed);
+        self.last_keep_alive_time.store(Instant::now());
+        {
+            let mut pending = self
+                .pending_keep_alives
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            pending.push((keep_alive_id, Instant::now()));
+            if pending.len() > 16 {
+                pending.remove(0);
+            }
+        }
+        let packet = pumpkin_protocol::java::client::play::CKeepAlive::new(keep_alive_id);
+        self.enqueue_client_packet(&packet).await;
+        true
+    }
+
     pub async fn progress_player_packets(&self, player: &Arc<Player>, server: &Arc<Server>) {
         let Some(mut network_reader) = self
             .network_reader
@@ -250,43 +299,9 @@ impl JavaClient {
             tokio::select! {
                 // KEEP-ALIVE TIMER
                 _ = keep_alive_interval.tick() => {
-                    // Check if the client has timed out on keep-alive responses or no packet activity
-                    let has_timed_out = {
-                        let pending = self
-                            .pending_keep_alives
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        pending.iter().any(|(_, send_time)| send_time.elapsed() > timeout_duration)
-                    } || (self.wait_for_keep_alive.load(Ordering::Relaxed) && self.last_keep_alive_time.load().elapsed() > timeout_duration)
-                      || (self.last_packet_time.load().elapsed() > timeout_duration);
-
-                    if has_timed_out {
-                        self.kick(pumpkin_macros::translate_cross!(translation::java::DISCONNECT_TIMEOUT, translation::bedrock::DISCONNECT_TIMEOUT)).await;
+                    if !self.send_keep_alive(timeout_duration).await {
                         break;
                     }
-
-                    let keep_alive_id = i64::from(
-                        SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis() as i32,
-                    );
-
-                    self.keep_alive_id.store(keep_alive_id);
-                    self.wait_for_keep_alive.store(true, Ordering::Relaxed);
-                    self.last_keep_alive_time.store(Instant::now());
-                    {
-                        let mut pending = self
-                            .pending_keep_alives
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        pending.push((keep_alive_id, Instant::now()));
-                        if pending.len() > 16 {
-                            pending.remove(0);
-                        }
-                    }
-                    let packet = pumpkin_protocol::java::client::play::CKeepAlive::new(keep_alive_id);
-                    self.enqueue_client_packet(&packet).await;
                 }
 
                 () = self.close_token.cancelled() => {

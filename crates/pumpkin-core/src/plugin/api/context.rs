@@ -17,7 +17,7 @@ use tracing::Level;
 
 use crate::{
     entity::player::Player,
-    plugin::{DynEventHandler, EventHandler, HandlerMap, PluginManager, TypedEventHandler},
+    plugin::{EventHandler, HandlerMap, PluginManager, TypedEventHandler},
     server::Server,
 };
 

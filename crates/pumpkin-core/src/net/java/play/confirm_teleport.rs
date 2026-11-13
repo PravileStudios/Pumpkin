@@ -34,15 +34,13 @@ impl JavaClient {
             TeleportResult::WrongId => {
                 debug!(
                     "ignoring stale teleport confirm {} from {}",
-                    confirm_teleport.teleport_id.0,
-                    player.gameprofile.name
+                    confirm_teleport.teleport_id.0, player.gameprofile.name
                 );
             }
             TeleportResult::NotTeleporting => {
                 debug!(
                     "ignoring teleport confirm {} from {} with no teleport pending",
-                    confirm_teleport.teleport_id.0,
-                    player.gameprofile.name
+                    confirm_teleport.teleport_id.0, player.gameprofile.name
                 );
             }
         }
