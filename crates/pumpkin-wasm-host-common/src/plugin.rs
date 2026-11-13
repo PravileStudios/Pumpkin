@@ -1,3 +1,4 @@
+use pumpkin_core::plugin::api::events::server::packet::PacketReceivedEvent;
 use std::{
     any::Any,
     sync::{Arc, OnceLock},
@@ -234,9 +235,27 @@ pub struct WasmPlugin {
     /// The plugin's name when its `fail_closed` override is on: a failed handler then cancels
     /// its event and disconnects the player of a join or received packet.
     pub fail_closed: OnceLock<String>,
+    /// The `packet_ids` override: ids of the received packets this plugin's handlers get.
+    pub packet_ids: OnceLock<Vec<i32>>,
+}
+
+/// Whether a received packet with id `packet_id` is filtered out by a `packet_ids` override.
+#[must_use]
+pub fn packet_filtered_out(packet_ids: Option<&[i32]>, packet_id: i32) -> bool {
+    packet_ids.is_some_and(|ids| !ids.contains(&packet_id))
 }
 
 impl WasmPlugin {
+    /// Whether this plugin's handlers skip `event`: a received packet outside its `packet_ids`.
+    #[must_use]
+    pub fn skips_event(&self, event: &dyn Any) -> bool {
+        event
+            .downcast_ref::<PacketReceivedEvent>()
+            .is_some_and(|packet| {
+                packet_filtered_out(self.packet_ids.get().map(Vec::as_slice), packet.packet_id)
+            })
+    }
+
     /// The guest exports of this plugin. Each API version's host only ever sees plugins of its own version.
     ///
     /// # Panics
@@ -261,7 +280,15 @@ mod tests {
         ComponentBuilder, ComponentTypeRef, InstanceType, Module, ProducersField, ProducersSection,
     };
 
-    use super::{is_wasi_p3_import, scan_component_names};
+    use super::{is_wasi_p3_import, packet_filtered_out, scan_component_names};
+
+    #[test]
+    fn packet_ids_override_filters_other_packets() {
+        assert!(!packet_filtered_out(None, 7));
+        assert!(!packet_filtered_out(Some(&[19, 41, 46]), 41));
+        assert!(packet_filtered_out(Some(&[19, 41, 46]), 7));
+        assert!(packet_filtered_out(Some(&[]), 19));
+    }
 
     fn component_importing(names: &[&str]) -> Vec<u8> {
         let mut component = ComponentBuilder::default();

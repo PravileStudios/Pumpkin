@@ -41,6 +41,7 @@ pub struct PluginsConfig {
     /// blocked_permissions = ["network:outbound"]
     /// loopback_only = true
     /// fail_closed = false
+    /// packet_ids = [19, 41, 46]
     ///
     /// [plugins.overrides.my_plugin.environment]
     /// MY_API_KEY = "secret_key"
@@ -92,6 +93,9 @@ pub struct PluginOverride {
     /// disconnect the player for a failed join or packet handler, instead of letting it through.
     /// Meant for security plugins such as login plugins.
     pub fail_closed: bool,
+    /// Ids of the received packets this plugin's packet handlers are called for. Unset means
+    /// every packet.
+    pub packet_ids: Option<Vec<i32>>,
 }
 
 impl Default for PluginOverride {
@@ -105,6 +109,7 @@ impl Default for PluginOverride {
             loopback_only: None,
             environment: HashMap::new(),
             fail_closed: false,
+            packet_ids: None,
         }
     }
 }
@@ -151,6 +156,7 @@ mod tests {
             blocked_permissions = ["fs:write:data"]
             loopback_only = false
             fail_closed = true
+            packet_ids = [19, 41]
 
             [overrides.my_plugin.environment]
             API_KEY = "12345"
@@ -181,5 +187,10 @@ mod tests {
         assert_eq!(override_cfg.environment.get("API_KEY").unwrap(), "12345");
         assert!(override_cfg.fail_closed);
         assert!(!config.overrides.get("other_plugin").unwrap().fail_closed);
+        assert_eq!(override_cfg.packet_ids, Some(vec![19, 41]));
+        assert_eq!(
+            config.overrides.get("other_plugin").unwrap().packet_ids,
+            None
+        );
     }
 }

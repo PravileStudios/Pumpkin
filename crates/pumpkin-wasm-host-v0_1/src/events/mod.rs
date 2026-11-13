@@ -316,6 +316,9 @@ impl WasmPluginEventHandler {
 impl<E: Payload + ToFromWasmEvent + Clone + 'static> EventHandler<E> for WasmPluginEventHandler {
     fn handle<'a>(&'a self, server: &'a Arc<Server>, event: &'a E) -> BoxFuture<'a, ()> {
         Box::pin(async {
+            if self.plugin.skips_event(event.as_any()) {
+                return;
+            }
             let pending = Box::new(NotifiedEvent(event.clone()));
             if let Err(error) = self.dispatch(server.clone(), pending).await {
                 tracing::error!(handler_id = self.handler_id, %error, "Wasm event handler failed");
@@ -334,6 +337,9 @@ impl<E: Payload + ToFromWasmEvent + Clone + 'static> EventHandler<E> for WasmPlu
         event: &'a mut E,
     ) -> BoxFuture<'a, ()> {
         Box::pin(async {
+            if self.plugin.skips_event(event.as_any()) {
+                return;
+            }
             let pending = Box::new(BlockingEvent(event.clone()));
             match self.dispatch(server.clone(), pending).await {
                 Ok(updated_event) => {

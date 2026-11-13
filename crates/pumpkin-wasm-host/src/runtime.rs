@@ -140,6 +140,7 @@ impl PluginRuntime {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub async fn init_plugin<P: AsRef<Path>>(
         &self,
         path: P,
@@ -231,6 +232,7 @@ impl PluginRuntime {
             store,
             task_scheduler: Arc::clone(&self.task_scheduler),
             fail_closed: std::sync::OnceLock::new(),
+            packet_ids: std::sync::OnceLock::new(),
         });
         let weak_plugin = Arc::downgrade(&wasm_plugin);
         wasm_plugin
@@ -413,6 +415,9 @@ pub async fn on_load(
     let metadata = context.get_metadata();
     let plugin_config = &context.server.advanced_config.plugins;
     let plugin_override = plugin_config.overrides.get(&metadata.name);
+    if let Some(ids) = plugin_override.and_then(|o| o.packet_ids.clone()) {
+        let _ = wasm_plugin.packet_ids.set(ids);
+    }
     if plugin_override.is_some_and(|o| o.fail_closed) {
         let _ = wasm_plugin.fail_closed.set(metadata.name.clone());
     }
