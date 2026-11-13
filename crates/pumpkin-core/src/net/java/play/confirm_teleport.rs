@@ -32,12 +32,18 @@ impl JavaClient {
         match result {
             TeleportResult::Success => {}
             TeleportResult::WrongId => {
-                self.try_kick(&TextComponent::text("Wrong teleport id"));
+                debug!(
+                    "ignoring stale teleport confirm {} from {}",
+                    confirm_teleport.teleport_id.0,
+                    player.gameprofile.name
+                );
             }
             TeleportResult::NotTeleporting => {
-                self.try_kick(&TextComponent::text(
-                    "Send Teleport confirm, but we did not teleport",
-                ));
+                debug!(
+                    "ignoring teleport confirm {} from {} with no teleport pending",
+                    confirm_teleport.teleport_id.0,
+                    player.gameprofile.name
+                );
             }
         }
     }
