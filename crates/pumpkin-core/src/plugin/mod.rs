@@ -1202,10 +1202,12 @@ impl PluginManager {
 
         self.handlers.rcu(|handlers| {
             let mut new_handlers = (**handlers).clone();
-            new_handlers
-                .entry(E::get_name_static())
-                .or_default()
-                .push(typed_handler.clone());
+            let list = new_handlers.entry(E::get_name_static()).or_default();
+            let at = list
+                .iter()
+                .position(|h| *h.get_priority() > typed_handler.priority)
+                .unwrap_or(list.len());
+            list.insert(at, typed_handler.clone());
             Arc::new(new_handlers)
         });
     }
