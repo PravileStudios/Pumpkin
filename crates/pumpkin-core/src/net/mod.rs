@@ -348,6 +348,15 @@ impl ClientPlatform {
     }
 }
 
+/// Kick message for a connection whose UUID or name is already online.
+pub const ALREADY_CONNECTED: &str = "You are already connected";
+
+/// Whether two profiles are the same player: same UUID, or same name ignoring case.
+#[must_use]
+pub fn same_player(a_id: Uuid, a_name: &str, b_id: Uuid, b_name: &str) -> bool {
+    a_id == b_id || a_name.eq_ignore_ascii_case(b_name)
+}
+
 pub async fn can_not_join(
     profile: &GameProfile,
     address: &SocketAddr,
@@ -356,6 +365,10 @@ pub async fn can_not_join(
     const FORMAT_DESCRIPTION: &[time::format_description::FormatItem<'static>] = time::macros::format_description!(
         "[year]-[month]-[day] at [hour]:[minute]:[second] [offset_hour sign:mandatory]:[offset_minute]"
     );
+
+    if server.is_player_online(profile) {
+        return Some(TextComponent::text(ALREADY_CONNECTED));
+    }
 
     let mut banned_players = server
         .data
@@ -604,7 +617,16 @@ pub enum DisconnectReason {
 
 #[cfg(test)]
 mod tests {
-    use crate::net::is_valid_player_name;
+    use crate::net::{is_valid_player_name, same_player};
+    use uuid::Uuid;
+
+    #[test]
+    fn same_player_by_uuid_or_name_ignoring_case() {
+        let (a, b) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        assert!(same_player(a, "Steve", a, "Alex"));
+        assert!(same_player(a, "Steve", b, "sTEVE"));
+        assert!(!same_player(a, "Steve", b, "Steve_"));
+    }
 
     /// Test case for a standard, valid English name at max length.
     #[test]

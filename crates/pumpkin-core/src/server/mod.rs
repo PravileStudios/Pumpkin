@@ -68,6 +68,13 @@ pub use recipe::RecipeManager;
 
 use crate::data::advancement_data::AdvancementManager;
 
+/// Result of trying to put a joining player into a world.
+enum Admission {
+    Admitted,
+    Closed,
+    AlreadyOnline,
+}
+
 /// Represents a Minecraft server instance.
 #[repr(C)]
 pub struct Server {
@@ -767,7 +774,6 @@ impl Server {
             'after: {
                 player.screen_handler_sync_handler.store_player(player.clone());
                 if !self.admit_player(&world, &player) {
-                    player.kick(DisconnectReason::Shutdown, &TextComponent::text("Server stopped"));
                     return None;
                 }
                 Some({
@@ -827,13 +833,54 @@ impl Server {
             .remove_player(player);
     }
 
-    /// Adds player to `world` unless shutdown already closed admission.
+    /// Adds player to `world` unless shutdown already closed admission or a player with the
+    /// same UUID or name is online, and kicks the player when refused. Admissions are
+    /// serialized so two connections for one player cannot both get in.
     fn admit_player(&self, world: &World, player: &Arc<Player>) -> bool {
-        let closed = self
-            .admission_closed
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        !*closed && world.add_player(player).is_ok()
+        let admission = {
+            let closed = self
+                .admission_closed
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if *closed {
+                Admission::Closed
+            } else if self.is_player_online(&player.gameprofile) {
+                Admission::AlreadyOnline
+            } else if world.add_player(player).is_ok() {
+                Admission::Admitted
+            } else {
+                Admission::Closed
+            }
+        };
+        match admission {
+            Admission::Admitted => return true,
+            Admission::Closed => {
+                player.kick(
+                    DisconnectReason::Shutdown,
+                    &TextComponent::text("Server stopped"),
+                );
+            }
+            Admission::AlreadyOnline => player.client.try_kick(
+                DisconnectReason::LoggedInOtherLocation,
+                &TextComponent::text(crate::net::ALREADY_CONNECTED),
+            ),
+        }
+        false
+    }
+
+    /// Whether a player with the UUID or the name (ignoring case) of `profile` is online.
+    #[must_use]
+    pub fn is_player_online(&self, profile: &GameProfile) -> bool {
+        self.worlds.load().iter().any(|world| {
+            world.players.load().iter().any(|p| {
+                crate::net::same_player(
+                    p.gameprofile.id,
+                    &p.gameprofile.name,
+                    profile.id,
+                    &profile.name,
+                )
+            })
+        })
     }
 
     /// Refuses all later joins. Returns once every join in progress is in a world
