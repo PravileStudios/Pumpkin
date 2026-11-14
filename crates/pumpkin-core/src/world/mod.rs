@@ -5169,7 +5169,7 @@ impl World {
     }
 
     /// Tab-list add entry for `player` from its stored state, as Java and Bedrock packets.
-    fn with_player_list_entry<R>(
+    pub(crate) fn with_player_list_entry<R>(
         player: &Player,
         f: impl FnOnce(&CPlayerInfoUpdate<'_>, &CPlayerList) -> R,
     ) -> R {

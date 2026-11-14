@@ -2,9 +2,11 @@ pub mod advancement;
 pub mod client_move;
 pub mod client_push;
 mod shoulders;
+mod skin_refresh;
 pub mod statistics;
 
 pub use client_move::{ClientMove, ClientMoveOutcome};
+pub use skin_refresh::replace_textures;
 
 use core::f32;
 use std::collections::{HashMap, VecDeque};
@@ -4773,7 +4775,10 @@ impl Player {
                 return;
             }
         }
+        self.send_teleport(position, yaw, pitch);
+    }
 
+    fn send_teleport(&self, position: Vector3<f64>, yaw: f32, pitch: f32) {
         let i = self.teleport_id_count.fetch_add(1, Ordering::Relaxed);
         self.chunk_send_epoch.fetch_add(1, Ordering::Relaxed);
         let teleport_id = i + 1;

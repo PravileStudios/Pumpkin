@@ -35,7 +35,6 @@ use pumpkin_core::{
     net::DisconnectReason,
 };
 use pumpkin_inventory::player::player_inventory::PlayerInventory;
-use pumpkin_protocol::Property;
 use pumpkin_protocol::bedrock::client::modal_form_request::CModalFormRequest;
 use pumpkin_protocol::java::client::dialog::DialogNBT;
 use pumpkin_util::permission::PermissionLvl;
@@ -2577,17 +2576,17 @@ impl pumpkin::plugin::player::HostPlayer for PluginHostState {
 
     fn set_skin(&mut self, player: Resource<Player>, skin: PlayerSkin) -> wasmtime::Result<()> {
         let player = self.get(&player)?;
-        let mut properties = (**player.gameprofile.properties.load()).clone();
-
-        properties.retain(|p| p.name.as_ref() != "textures");
-        properties.push(Property {
-            name: "textures".into(),
-            value: skin.value.into(),
-            signature: skin.signature.map(std::convert::Into::into),
-        });
-
+        let properties = pumpkin_core::entity::player::replace_textures(
+            &player.gameprofile.properties.load(),
+            skin.value,
+            skin.signature,
+        );
         player.gameprofile.properties.store(Arc::new(properties));
+        Ok(())
+    }
 
+    fn refresh_skin(&mut self, player: Resource<Player>) -> wasmtime::Result<()> {
+        self.get(&player)?.refresh_skin();
         Ok(())
     }
 

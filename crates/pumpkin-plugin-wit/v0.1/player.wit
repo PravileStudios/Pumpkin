@@ -1159,8 +1159,12 @@ interface player {
         get-skin: func() -> option<player-skin>;
 
         /// Updates the player's skin textures.
-        /// Note: this only updates the fields, it doesn't reload the skin.
+        /// An empty value removes the textures (default skin).
+        /// Note: this only updates the fields; call refresh-skin to show the change.
         set-skin: func(skin: player-skin);
+
+        /// Re-sends the player's profile so viewers and the player itself see the current skin.
+        refresh-skin: func();
 
         /// Returns which skin parts are visible.
         get-skin-parts: func() -> skin-parts;
