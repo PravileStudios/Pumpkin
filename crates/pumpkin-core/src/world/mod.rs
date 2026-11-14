@@ -4145,7 +4145,7 @@ impl World {
         server.notify_update_if_op(player);
     }
 
-    fn send_player_equipment(&self, from: &Player) {
+    pub(crate) fn send_player_equipment(&self, from: &Player) {
         let held_item = from.inventory.held_item();
         let mut equipment_list = vec![(EquipmentSlot::MAIN_HAND.discriminant(), held_item.clone())];
 

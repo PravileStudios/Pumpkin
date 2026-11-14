@@ -88,6 +88,7 @@ impl Player {
         world
             .entity_tracker
             .respawn_entity(&(self.clone() as Arc<dyn EntityBase>), &world);
+        world.send_player_equipment(self);
         self.restore_vehicle_link(&world);
 
         if matches!(self.client.as_ref(), ClientPlatform::Java(_))
