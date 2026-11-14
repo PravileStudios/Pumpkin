@@ -984,6 +984,25 @@ interface %world {
         /// Sets a custom chunk generator for this world using a registered generator ID.
         set-chunk-generator: func(generator-id: u32);
 
+        /// Makes the map decoration of this world static. Block entities stop ticking, and
+        /// entities loaded from map data (chunk generators and saved chunks) are frozen: they
+        /// are shown and keep their data but never tick or move, and are invulnerable. Players and
+        /// entities spawned later tick as usual. The setting is not saved with the world, so set
+        /// it again after loading the world, before its chunks generate.
+        set-static-decor: func(enabled: bool);
+
+        /// Returns whether the map decoration of this world is static.
+        is-static-decor: func() -> bool;
+
+        /// Returns the block entities of a loaded chunk in the format `chunk-buffer.add-block-entity`
+        /// takes: chunk-local x and z, absolute y, NBT without x, y and z. Empty when the chunk is
+        /// not loaded.
+        get-chunk-block-entities: func(chunk-x: s32, chunk-z: s32) -> list<chunk-block-entity>;
+
+        /// Returns the non-player entities of a loaded chunk in the format `chunk-buffer.add-entity`
+        /// takes: chunk-relative Pos, no UUID, passengers as separate entries.
+        get-chunk-entities: func(chunk-x: s32, chunk-z: s32) -> list<list<u8>>;
+
         /// Sets a namespaced custom data value on this world.
         set-custom-data: func(namespace: string, key: string, value: nbt-tree);
         /// Returns a namespaced custom data value from this world, if set.
@@ -1005,6 +1024,14 @@ interface %world {
         noise,
         surface,
         features,
+    }
+
+    /// A block entity of a chunk: chunk-local x and z, absolute y, unnamed NBT without x, y, z.
+    record chunk-block-entity {
+        x: u8,
+        y: s32,
+        z: u8,
+        nbt: list<u8>,
     }
 
     /// Mutable chunk buffer representing a 16x16 column during custom world generation.
@@ -1034,6 +1061,18 @@ interface %world {
         set-biome: func(x: u8, y: s32, z: u8, biome: biome);
         /// Fills the entire chunk with the given biome.
         fill-biome: func(biome: biome);
+
+        /// Attaches a block entity to the block at local coordinates (0..16, y, 0..16). The NBT is
+        /// unnamed Java NBT (at most 64 KiB) with the block entity `id`; x, y and z are set by the
+        /// host. Place the block first: it must carry a block entity of that id. Blocks that carry
+        /// a block entity and get none here receive the default one when the chunk finishes.
+        add-block-entity: func(x: u8, y: s32, z: u8, nbt: list<u8>) -> result<_, string>;
+
+        /// Adds an entity that spawns when the chunk finishes generating, with a fresh UUID. The
+        /// NBT is unnamed Java NBT (at most 64 KiB) with `id` and `Pos`; Pos x and z are relative
+        /// to this chunk's north-west corner (0 <= x, z < 16) and Pos y is absolute. Passengers are
+        /// not supported; add each entity separately.
+        add-entity: func(nbt: list<u8>) -> result<_, string>;
     }
 
     /// Resolves a block name and optional properties to a block state ID.

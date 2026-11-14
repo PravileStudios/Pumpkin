@@ -165,6 +165,13 @@ impl TrackedEntity {
     /// Vanilla `ServerEntity.sendChanges`. Non-player entities only.
     pub fn send_changes(&self, world: &World) {
         let entity = self.entity.get_entity();
+        if entity.is_decor_frozen()
+            && !entity.velocity_dirty.load(Ordering::SeqCst)
+            && !entity.sync_velocity.load(Ordering::SeqCst)
+            && !entity.synched_data.is_dirty()
+        {
+            return;
+        }
         self.send_bedrock_move(entity, world);
         let tick = self.tick_count.fetch_add(1, Relaxed);
         let needs_sync = entity.velocity_dirty.swap(false, Ordering::SeqCst);

@@ -454,6 +454,11 @@ impl ProtoChunk {
         self.pending_structure_entities.push(nbt);
     }
 
+    #[must_use]
+    pub const fn pending_structure_entity_count(&self) -> usize {
+        self.pending_structure_entities.len()
+    }
+
     pub fn take_pending_structure_entities(&mut self) -> Vec<NbtCompound> {
         std::mem::take(&mut self.pending_structure_entities)
     }

@@ -297,6 +297,7 @@ pub struct World {
     pub custom_block_entity_data: DashMap<BlockPos, NbtCompound>,
     /// Entity tracker responsible for tracking entity visibility and sending delta/status packets to watchers.
     pub entity_tracker: entity_tracker::EntityTracker,
+    static_decor: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Clone, Copy)]
@@ -455,6 +456,7 @@ impl World {
             custom_data: std::sync::Mutex::new(custom_data),
             custom_block_entity_data: DashMap::new(),
             entity_tracker: entity_tracker::EntityTracker::new(),
+            static_decor: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -1775,6 +1777,9 @@ impl World {
         let tickable: Vec<_> = entities_to_tick
             .par_iter()
             .filter_map(|entity| {
+                if entity.get_entity().is_decor_frozen() {
+                    return None;
+                }
                 let entity_chunk = entity.get_entity().chunk_pos.load();
                 if !active_chunks.contains(&entity_chunk) {
                     return None;
@@ -1897,20 +1902,11 @@ impl World {
         }
         self.entity_tracker.update_all(self);
 
-        let mut block_entities: Vec<Arc<dyn BlockEntity>> = Vec::new();
-        if self.block_entities.len() < active_chunks.len() {
-            for chunk_block_entities in &self.block_entities {
-                if active_chunks.contains(chunk_block_entities.key()) {
-                    block_entities.extend(chunk_block_entities.values().cloned());
-                }
-            }
+        let block_entities = if self.is_static_decor() {
+            Vec::new()
         } else {
-            for chunk_pos in active_chunks.iter() {
-                if let Some(chunk_block_entities) = self.block_entities.get(chunk_pos) {
-                    block_entities.extend(chunk_block_entities.values().cloned());
-                }
-            }
-        }
+            self.ticking_block_entities(&active_chunks)
+        };
         let block_entity_count = block_entities.len();
 
         let t_be = std::time::Instant::now();
@@ -1947,6 +1943,27 @@ impl World {
                 block_entity_elapsed,
             );
         }
+    }
+
+    fn ticking_block_entities(
+        &self,
+        active_chunks: &FxHashSet<Vector2<i32>>,
+    ) -> Vec<Arc<dyn BlockEntity>> {
+        let mut block_entities: Vec<Arc<dyn BlockEntity>> = Vec::new();
+        if self.block_entities.len() < active_chunks.len() {
+            for chunk_block_entities in &self.block_entities {
+                if active_chunks.contains(chunk_block_entities.key()) {
+                    block_entities.extend(chunk_block_entities.values().cloned());
+                }
+            }
+        } else {
+            for chunk_pos in active_chunks {
+                if let Some(chunk_block_entities) = self.block_entities.get(chunk_pos) {
+                    block_entities.extend(chunk_block_entities.values().cloned());
+                }
+            }
+        }
+        block_entities
     }
 
     fn send_block_updated(
@@ -4799,6 +4816,7 @@ impl World {
                             // animation; residual velocity from the original drop is
                             // stale data.
                             entity.get_entity().velocity.store(Vector3::default());
+                            world.prepare_map_entity(entity.as_ref());
 
                             // UUID-dedupes if another watcher already loaded this entity.
                             // Tracker owns pairing (spawn packets + vehicle restore).
@@ -7050,6 +7068,62 @@ impl World {
             .collect()
     }
 
+    pub fn set_static_decor(&self, enabled: bool) {
+        self.static_decor.store(enabled, Ordering::Release);
+    }
+
+    pub fn is_static_decor(&self) -> bool {
+        self.static_decor.load(Ordering::Acquire)
+    }
+
+    pub fn prepare_map_entity(&self, entity: &dyn EntityBase) {
+        if !self.is_static_decor() || entity.get_player().is_some() {
+            return;
+        }
+        let base = entity.get_entity();
+        base.freeze_as_decor();
+        base.invulnerable.store(true, Relaxed);
+        base.velocity.store(Vector3::default());
+    }
+
+    pub fn chunk_block_entity_nbts(&self, chunk_pos: Vector2<i32>) -> Vec<(BlockPos, NbtCompound)> {
+        let Some(mut saved) = self.level.read_chunk_sync(&chunk_pos, |chunk| {
+            chunk
+                .pending_block_entities
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        }) else {
+            return Vec::new();
+        };
+        if let Some(live) = self.block_entities.get(&chunk_pos) {
+            for (pos, block_entity) in live.iter() {
+                saved.insert(*pos, block_entity_nbt(block_entity.as_ref()));
+            }
+        }
+        let mut out: Vec<_> = saved.into_iter().collect();
+        out.sort_by_key(|(pos, _)| (pos.0.y, pos.0.z, pos.0.x));
+        out
+    }
+
+    pub fn chunk_entity_nbts(&self, chunk_pos: Vector2<i32>) -> Vec<NbtCompound> {
+        let entities = self.entities.load();
+        let mut out = Vec::new();
+        for entity in entities.iter() {
+            if entity.get_entity().is_removed()
+                || entity.get_player().is_some()
+                || saved_chunk_pos(entity.as_ref()) != chunk_pos
+            {
+                continue;
+            }
+            let mut nbt = NbtCompound::new();
+            entity.write_nbt(&mut nbt);
+            nbt.child_tags.remove("Passengers");
+            out.push(nbt);
+        }
+        out
+    }
+
     pub fn add_block_entity(&self, block_entity: Arc<dyn BlockEntity>) {
         let block_pos = block_entity.get_position();
         let chunk_pos = block_pos.chunk_position();
@@ -7148,6 +7222,9 @@ impl World {
     }
 
     fn migrate_pending_block_entities(&self, chunk_pos: Vector2<i32>) {
+        if self.is_static_decor() {
+            return;
+        }
         let positions: Vec<BlockPos> = self
             .level
             .read_chunk_sync(&chunk_pos, |chunk| {
@@ -8159,6 +8236,7 @@ impl WorldPortalExt for WorldPortal {
                 if let Some(mob) = entity.get_mob() {
                     mob.finalize_spawn_in_biome(biome);
                 }
+                self.0.prepare_map_entity(entity.as_ref());
                 self.0.spawn_entity(entity);
             }
         }

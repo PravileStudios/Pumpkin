@@ -1,4 +1,4 @@
-package pumpkin:plugin@0.1.1;
+package pumpkin:plugin@0.1.2;
 
 interface datapack {
     /// Information about a discovered or loaded datapack.

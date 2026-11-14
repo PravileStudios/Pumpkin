@@ -1570,6 +1570,7 @@ pub struct Entity {
     pub silent: AtomicBool,
     pub air_supply: AtomicI32,
     pub has_no_gravity: AtomicBool,
+    decor_frozen: AtomicBool,
     /// Scoreboard tags attached to this entity, managed with `/tag`.
     /// Vanilla allows at most [`MAX_SCOREBOARD_TAGS`] tags per entity.
     pub scoreboard_tags: std::sync::Mutex<HashSet<String>>,
@@ -1857,6 +1858,7 @@ impl Entity {
             silent: AtomicBool::new(false),
             air_supply: AtomicI32::new(breath::MAX_AIR),
             has_no_gravity: AtomicBool::new(false),
+            decor_frozen: AtomicBool::new(false),
             scoreboard_tags: std::sync::Mutex::new(HashSet::new()),
             no_physics: AtomicBool::new(false),
             first_tick: AtomicBool::new(true),
@@ -2171,6 +2173,15 @@ impl Entity {
 
     pub fn has_no_gravity(&self) -> bool {
         self.has_no_gravity.load(Ordering::Relaxed)
+    }
+
+    pub fn freeze_as_decor(&self) {
+        self.decor_frozen.store(true, Ordering::Relaxed);
+    }
+
+    #[must_use]
+    pub fn is_decor_frozen(&self) -> bool {
+        self.decor_frozen.load(Ordering::Relaxed)
     }
 
     pub fn set_has_no_gravity(&self, no_gravity: bool) {

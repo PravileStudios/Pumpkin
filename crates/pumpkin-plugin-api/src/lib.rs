@@ -207,9 +207,9 @@ pub mod wit {
         path: "../pumpkin-plugin-wit/v0.1",
         world: "plugin",
         chainable_methods: [
-            "pumpkin:plugin/command@0.1.1#command",
-            "pumpkin:plugin/command@0.1.1#command-node",
-            "pumpkin:plugin/text@0.1.1#text-component"
+            "pumpkin:plugin/command@0.1.2#command",
+            "pumpkin:plugin/command@0.1.2#command-node",
+            "pumpkin:plugin/text@0.1.2#text-component"
         ]
     });
 

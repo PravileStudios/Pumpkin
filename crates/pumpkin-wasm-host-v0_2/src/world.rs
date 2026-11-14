@@ -78,6 +78,7 @@ use pumpkin_core::block::entities::trial_spawner::TrialSpawnerBlockEntity as Int
 use pumpkin_core::block::entities::vault::VaultBlockEntity as InternalVaultBlockEntity;
 use pumpkin_core::world::explosion::ExplosionInteraction;
 use pumpkin_data::game_rules::{GameRule, GameRuleValue};
+use pumpkin_wasm_host_common::decor;
 use pumpkin_wasm_host_common::state::ChunkBuffer;
 use pumpkin_wasm_host_common::state::PluginHostState;
 
@@ -1136,6 +1137,49 @@ impl pumpkin::plugin::world::HostWorld for PluginHostState {
         Ok(Ok(()))
     }
 
+    fn set_static_decor(&mut self, world: Resource<World>, enabled: bool) -> wasmtime::Result<()> {
+        self.get(&world)?.set_static_decor(enabled);
+        Ok(())
+    }
+
+    fn is_static_decor(&mut self, world: Resource<World>) -> wasmtime::Result<bool> {
+        Ok(self.get(&world)?.is_static_decor())
+    }
+
+    fn get_chunk_block_entities(
+        &mut self,
+        world: Resource<World>,
+        chunk_x: i32,
+        chunk_z: i32,
+    ) -> wasmtime::Result<Vec<pumpkin::plugin::world::ChunkBlockEntity>> {
+        let world_ref = self.get(&world)?.clone();
+        let entries = world_ref
+            .chunk_block_entity_nbts(pumpkin_util::math::vector2::Vector2::new(chunk_x, chunk_z));
+        Ok(decor::export_block_entities(entries)
+            .into_iter()
+            .map(|entry| pumpkin::plugin::world::ChunkBlockEntity {
+                x: entry.x,
+                y: entry.y,
+                z: entry.z,
+                nbt: entry.nbt,
+            })
+            .collect())
+    }
+
+    fn get_chunk_entities(
+        &mut self,
+        world: Resource<World>,
+        chunk_x: i32,
+        chunk_z: i32,
+    ) -> wasmtime::Result<Vec<Vec<u8>>> {
+        let world_ref = self.get(&world)?.clone();
+        let chunk = pumpkin_util::math::vector2::Vector2::new(chunk_x, chunk_z);
+        Ok(decor::export_entities(
+            chunk,
+            world_ref.chunk_entity_nbts(chunk),
+        ))
+    }
+
     fn set_chunk_generator(
         &mut self,
         world: Resource<World>,
@@ -2111,6 +2155,35 @@ impl pumpkin::plugin::world::HostChunkBuffer for PluginHostState {
         let mut proto = res.proto_chunk.lock_ignore_poison();
         proto.flat_biome_map.fill(biome_id);
         Ok(())
+    }
+
+    fn add_block_entity(
+        &mut self,
+        this: Resource<pumpkin::plugin::world::ChunkBuffer>,
+        x: u8,
+        y: i32,
+        z: u8,
+        nbt: Vec<u8>,
+    ) -> wasmtime::Result<Result<(), String>> {
+        let res = self.get(&this)?;
+        let mut proto = res
+            .proto_chunk
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Ok(decor::add_block_entity(&mut proto, x, y, z, &nbt))
+    }
+
+    fn add_entity(
+        &mut self,
+        this: Resource<pumpkin::plugin::world::ChunkBuffer>,
+        nbt: Vec<u8>,
+    ) -> wasmtime::Result<Result<(), String>> {
+        let res = self.get(&this)?;
+        let mut proto = res
+            .proto_chunk
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Ok(decor::add_entity(&mut proto, &nbt))
     }
 
     fn drop(&mut self, rep: Resource<pumpkin::plugin::world::ChunkBuffer>) -> wasmtime::Result<()> {

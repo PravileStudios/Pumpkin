@@ -88,6 +88,26 @@ impl ChunkBuffer {
     pub fn fill_biome(&mut self, biome: Biome) {
         self.inner.fill_biome(biome);
     }
+
+    /// Attaches a block entity to the block at local `(x, y, z)`. `nbt` is unnamed Java NBT
+    /// with the block entity `id`; place the block first. Requires a server with plugin API
+    /// 0.1.2 or newer.
+    ///
+    /// # Errors
+    /// Returns the host's reason when the position, the NBT or the block does not fit.
+    pub fn add_block_entity(&mut self, x: u8, y: i32, z: u8, nbt: &[u8]) -> Result<(), String> {
+        self.inner.add_block_entity(x, y, z, nbt)
+    }
+
+    /// Adds an entity that spawns when the chunk finishes generating. `nbt` is unnamed Java NBT
+    /// with `id` and a `Pos` whose x and z are relative to this chunk. Requires a server with
+    /// plugin API 0.1.2 or newer.
+    ///
+    /// # Errors
+    /// Returns the host's reason when the NBT, the type or the position does not fit.
+    pub fn add_entity(&mut self, nbt: &[u8]) -> Result<(), String> {
+        self.inner.add_entity(nbt)
+    }
 }
 
 /// Trait for implementing custom world generation logic in plugins.
