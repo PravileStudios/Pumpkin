@@ -1,4 +1,5 @@
 use std::sync::{Arc, Weak};
+use std::time::{Duration, Instant};
 
 use pumpkin_inventory::screen_handler::{InventoryPlayer, ScreenHandler};
 use pumpkin_protocol::Property;
@@ -19,6 +20,50 @@ use super::Player;
 use crate::entity::EntityBase;
 use crate::net::ClientPlatform;
 use crate::world::World;
+
+pub const MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+
+#[derive(Debug, Default)]
+pub struct SkinRefresh {
+    last: Option<Instant>,
+    viewers_pending: bool,
+    own_view_pending: bool,
+}
+
+impl SkinRefresh {
+    fn request(&mut self, now: Instant) -> bool {
+        if self
+            .last
+            .is_some_and(|last| now.saturating_duration_since(last) < MIN_REFRESH_INTERVAL)
+        {
+            self.viewers_pending = true;
+            return false;
+        }
+        self.last = Some(now);
+        self.viewers_pending = false;
+        self.own_view_pending = true;
+        true
+    }
+
+    fn due(&mut self, now: Instant) -> bool {
+        if !self.viewers_pending {
+            return false;
+        }
+        let ready = self
+            .last
+            .is_none_or(|last| now.saturating_duration_since(last) >= MIN_REFRESH_INTERVAL);
+        if ready {
+            self.last = Some(now);
+            self.viewers_pending = false;
+            self.own_view_pending = true;
+        }
+        ready
+    }
+
+    const fn idle(&self) -> bool {
+        !self.viewers_pending && !self.own_view_pending
+    }
+}
 
 #[must_use]
 pub fn replace_textures(
@@ -41,17 +86,59 @@ pub fn replace_textures(
     out
 }
 
+enum OwnView {
+    Now,
+    Later,
+    Skip,
+}
+
 impl Player {
     pub fn refresh_skin(self: &Arc<Self>) {
         let world = self.world();
-        let id = self.gameprofile.id;
-        let Some(registered) = world.get_player_by_uuid(id) else {
-            return;
-        };
-        if !Arc::ptr_eq(&registered, self) {
+        let registered = world
+            .get_player_by_uuid(self.gameprofile.id)
+            .is_some_and(|p| Arc::ptr_eq(&p, self));
+        if !registered {
             return;
         }
+        let due = self
+            .skin_refresh
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .request(Instant::now());
+        if due {
+            self.refresh_viewers(&world);
+            self.try_refresh_own_view(&world);
+        }
+    }
 
+    pub(super) fn tick_skin_refresh(&self) {
+        let (viewers, own) = {
+            let Ok(mut state) = self.skin_refresh.try_lock() else {
+                return;
+            };
+            if state.idle() {
+                return;
+            }
+            (state.due(Instant::now()), state.own_view_pending)
+        };
+        let world = self.world();
+        let Some(me) = world.get_player_by_uuid(self.gameprofile.id) else {
+            return;
+        };
+        if !std::ptr::eq(Arc::as_ptr(&me), self) {
+            return;
+        }
+        if viewers {
+            me.refresh_viewers(&world);
+        }
+        if viewers || own {
+            me.try_refresh_own_view(&world);
+        }
+    }
+
+    fn refresh_viewers(self: &Arc<Self>, world: &World) {
+        let id = self.gameprofile.id;
         world.broadcast_editioned_all_worlds(
             &CRemovePlayerInfo::new(&[id]),
             &CPlayerList {
@@ -85,21 +172,66 @@ impl Player {
             ));
         }
 
+        if self.living_entity.health.load() <= 0.0 {
+            return;
+        }
         world
             .entity_tracker
-            .respawn_entity(&(self.clone() as Arc<dyn EntityBase>), &world);
-        world.send_player_equipment(self);
-        self.restore_vehicle_link(&world);
-
-        if matches!(self.client.as_ref(), ClientPlatform::Java(_))
-            && self.has_client_loaded()
-            && self.living_entity.health.load() > 0.0
+            .respawn_entity(&(self.clone() as Arc<dyn EntityBase>), world);
+        if let Some((vehicle_id, passengers)) = self.vehicle_link()
+            && let Some(tracked) = world.entity_tracker.get_tracked_entity(vehicle_id)
         {
-            self.respawn_own_view(&world);
+            tracked.send_to_tracking_players(
+                &CSetPassengers::new(VarInt(vehicle_id), &passengers),
+                world,
+            );
         }
     }
 
-    fn restore_vehicle_link(&self, world: &World) {
+    fn own_view(&self) -> OwnView {
+        if !matches!(self.client.as_ref(), ClientPlatform::Java(_))
+            || self.living_entity.health.load() <= 0.0
+        {
+            return OwnView::Skip;
+        }
+        if !self.has_client_loaded()
+            || self.screen_open()
+            || self.is_sleeping()
+            || self.living_entity.entity.is_fall_flying()
+            || self.camera_target_id.load().is_some()
+        {
+            return OwnView::Later;
+        }
+        OwnView::Now
+    }
+
+    fn try_refresh_own_view(&self, world: &World) {
+        let view = self.own_view();
+        let mut state = self
+            .skin_refresh
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match view {
+            OwnView::Later => {}
+            OwnView::Skip => state.own_view_pending = false,
+            OwnView::Now => {
+                state.own_view_pending = false;
+                drop(state);
+                self.respawn_own_view(world);
+                self.resend_own_links();
+            }
+        }
+    }
+
+    fn screen_open(&self) -> bool {
+        let current = self
+            .current_screen_handler
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Arc::as_ptr(&current).cast::<()>() != Arc::as_ptr(&self.player_screen_handler).cast::<()>()
+    }
+
+    fn vehicle_link(&self) -> Option<(i32, Vec<VarInt>)> {
         let vehicle = self
             .living_entity
             .entity
@@ -107,10 +239,7 @@ impl Player {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
-            .and_then(Weak::upgrade);
-        let Some(vehicle) = vehicle else {
-            return;
-        };
+            .and_then(Weak::upgrade)?;
         let vehicle_entity = vehicle.get_entity();
         let passengers: Vec<VarInt> = vehicle_entity
             .passengers
@@ -119,29 +248,28 @@ impl Player {
             .iter()
             .map(|p| VarInt(p.get_entity().entity_id))
             .collect();
-        let packet = CSetPassengers::new(VarInt(vehicle_entity.entity_id), &passengers);
-        if let Some(tracked) = world
-            .entity_tracker
-            .get_tracked_entity(vehicle_entity.entity_id)
-        {
-            tracked.send_to_tracking_players(&packet, world);
+        Some((vehicle_entity.entity_id, passengers))
+    }
+
+    fn resend_own_links(&self) {
+        if let Some((vehicle_id, passengers)) = self.vehicle_link() {
+            self.try_send_client_packet(&CSetPassengers::new(VarInt(vehicle_id), &passengers));
         }
-        self.try_send_client_packet(&packet);
+        let own: Vec<VarInt> = self
+            .living_entity
+            .entity
+            .passengers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .map(|p| VarInt(p.get_entity().entity_id))
+            .collect();
+        if !own.is_empty() {
+            self.try_send_client_packet(&CSetPassengers::new(VarInt(self.entity_id()), &own));
+        }
     }
 
     fn respawn_own_view(&self, world: &World) {
-        let screen_open = {
-            let current = self
-                .current_screen_handler
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            Arc::as_ptr(&current).cast::<()>()
-                != Arc::as_ptr(&self.player_screen_handler).cast::<()>()
-        };
-        if screen_open {
-            self.close_handled_screen();
-        }
-
         let gamemode = self.gamemode.load();
         let last_death_location = self
             .last_death_location
@@ -168,6 +296,8 @@ impl Player {
             CRespawn::KEEP_ALL_DATA,
         ));
 
+        world.send_level_info(self);
+        self.set_client_loaded(false);
         self.send_abilities_update();
         self.send_permission_lvl_update();
         self.enqueue_set_held_item_packet(&CSetSelectedSlot::new(
@@ -260,5 +390,26 @@ mod tests {
         assert_eq!(after.len(), 1);
         assert_eq!(after[0].name.as_ref(), "textures");
         assert!(after[0].signature.is_none());
+    }
+
+    #[test]
+    fn refreshes_are_throttled_and_coalesced() {
+        let start = Instant::now();
+        let mut state = SkinRefresh::default();
+        assert!(state.idle());
+        assert!(state.request(start));
+        assert!(state.own_view_pending);
+        state.own_view_pending = false;
+        assert!(!state.request(start + Duration::from_millis(100)));
+        assert!(!state.request(start + Duration::from_millis(200)));
+        assert!(state.viewers_pending);
+        assert!(!state.due(start + Duration::from_millis(500)));
+        assert!(state.due(start + MIN_REFRESH_INTERVAL + Duration::from_millis(100)));
+        assert!(!state.viewers_pending);
+        assert!(state.own_view_pending);
+        assert!(!state.due(start + Duration::from_secs(5)));
+        state.own_view_pending = false;
+        assert!(state.idle());
+        assert!(state.request(start + Duration::from_secs(5)));
     }
 }

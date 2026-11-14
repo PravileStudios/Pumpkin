@@ -6,7 +6,7 @@ mod skin_refresh;
 pub mod statistics;
 
 pub use client_move::{ClientMove, ClientMoveOutcome};
-pub use skin_refresh::replace_textures;
+pub use skin_refresh::{SkinRefresh, replace_textures};
 
 use core::f32;
 use std::collections::{HashMap, VecDeque};
@@ -705,6 +705,7 @@ pub struct Player {
     pub has_played_before: AtomicBool,
     root_vehicle_uuid: AtomicCell<Option<Uuid>>,
     pub chat_session: Arc<Mutex<ChatSession>>,
+    skin_refresh: Mutex<SkinRefresh>,
     pub signature_cache: Mutex<MessageCache>,
     pub player_screen_handler: Arc<std::sync::Mutex<PlayerScreenHandler>>,
     pub current_screen_handler: std::sync::Mutex<Arc<std::sync::Mutex<dyn ScreenHandler>>>,
@@ -1048,6 +1049,7 @@ impl Player {
             has_played_before: AtomicBool::new(false),
             root_vehicle_uuid: AtomicCell::new(None),
             chat_session: Arc::new(Mutex::new(ChatSession::default())), // Placeholder value until the player actually sets their session id
+            skin_refresh: Mutex::new(SkinRefresh::default()),
             signature_cache: Mutex::new(MessageCache::default()),
             player_screen_handler: player_screen_handler.clone(),
             current_screen_handler: std::sync::Mutex::new(player_screen_handler),
@@ -3391,6 +3393,7 @@ impl Player {
 
         // Timeout/keep alive handling
         self.tick_client_load_timeout();
+        self.tick_skin_refresh();
         // Idle timeout handling
         let now = Instant::now();
         let idle_timeout_minutes = server.player_idle_timeout.load(Ordering::Relaxed);

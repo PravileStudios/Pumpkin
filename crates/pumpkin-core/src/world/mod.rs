@@ -4145,7 +4145,7 @@ impl World {
         server.notify_update_if_op(player);
     }
 
-    pub(crate) fn send_player_equipment(&self, from: &Player) {
+    fn send_player_equipment(&self, from: &Player) {
         let held_item = from.inventory.held_item();
         let mut equipment_list = vec![(EquipmentSlot::MAIN_HAND.discriminant(), held_item.clone())];
 
@@ -4187,6 +4187,51 @@ impl World {
         self.send_to_tracking_players_editioned(from.get_entity(), &je_packet, &be_mob_equipment);
         self.send_to_tracking_players_bedrock(from.get_entity(), &be_offhand_equipment);
         self.send_to_tracking_players_bedrock(from.get_entity(), &be_armor_equipment);
+    }
+
+    pub fn send_level_info(&self, player: &Player) {
+        let ClientPlatform::Java(client) = player.client.as_ref() else {
+            return;
+        };
+        self.worldborder
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .init_client(client);
+        player.send_time(self);
+        let (spawn, yaw, pitch) = {
+            let info = self.level_info.load();
+            (
+                BlockPos::new(info.spawn_x, info.spawn_y, info.spawn_z),
+                info.spawn_yaw,
+                info.spawn_pitch,
+            )
+        };
+        player.try_send_client_packet(&CPlayerSpawnPosition::new(
+            spawn,
+            yaw,
+            pitch,
+            self.dimension.minecraft_name.to_owned(),
+        ));
+        let (raining, rain_level, thunder_level) = {
+            let weather = self
+                .weather
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            (
+                weather.raining,
+                weather.rain_level.clamp(0.0, 1.0),
+                weather.thunder_level.clamp(0.0, 1.0),
+            )
+        };
+        if raining {
+            player.try_send_client_packet(&CGameEvent::new(GameEvent::BeginRaining, 0.0));
+            player.try_send_client_packet(&CGameEvent::new(GameEvent::RainLevelChange, rain_level));
+            player.try_send_client_packet(&CGameEvent::new(
+                GameEvent::ThunderLevelChange,
+                thunder_level,
+            ));
+        }
+        player.send_difficulty_update();
     }
 
     pub fn send_world_info(&self, player: &Arc<Player>) {
@@ -5175,25 +5220,56 @@ impl World {
     ) -> R {
         let profile = &player.gameprofile;
         let properties = profile.properties.load();
-        let actions = [
-            PlayerAction::AddPlayer {
-                name: &profile.name,
-                properties: &properties,
-            },
+        let chat_reports = player
+            .world()
+            .server
+            .upgrade()
+            .is_some_and(|server| server.basic_config.allow_chat_reports);
+        let chat = chat_reports.then(|| {
+            let session = player
+                .chat_session
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let initialized = session.session_id != uuid::Uuid::nil()
+                && !session.public_key.is_empty()
+                && !session.signature.is_empty();
+            initialized.then(|| InitChat {
+                session_id: session.session_id,
+                expires_at: session.expires_at,
+                public_key: session.public_key.clone(),
+                signature: session.signature.clone(),
+            })
+        });
+        let mut actions = vec![PlayerAction::AddPlayer {
+            name: &profile.name,
+            properties: &properties,
+        }];
+        if let Some(chat) = chat {
+            actions.push(PlayerAction::InitializeChat(chat));
+        }
+        actions.extend([
             PlayerAction::UpdateGameMode(VarInt(player.gamemode.load() as i32)),
             PlayerAction::UpdateListed(player.tab_list_listed.load(Ordering::Relaxed)),
             PlayerAction::UpdateLatency(VarInt(player.tab_list_latency.load(Ordering::Relaxed))),
             PlayerAction::UpdateListOrder(VarInt(player.tab_list_order.load(Ordering::Relaxed))),
             PlayerAction::UpdateHat(true),
-        ];
+        ]);
         let entry = [pumpkin_protocol::java::client::play::Player {
             uuid: profile.id,
             actions: &actions,
         }];
         f(
-            &CPlayerInfoUpdate::new(Self::TAB_LIST_ADD_FLAGS, &entry),
+            &CPlayerInfoUpdate::new(Self::tab_list_add_flags(chat_reports), &entry),
             &player.bedrock_player_list(),
         )
+    }
+
+    const fn tab_list_add_flags(chat_reports: bool) -> u8 {
+        if chat_reports {
+            Self::TAB_LIST_ADD_FLAGS | PlayerInfoFlags::INITIALIZE_CHAT.bits()
+        } else {
+            Self::TAB_LIST_ADD_FLAGS
+        }
     }
 
     /// Publishes a player from another world -> tab list first, Java drops spawns without it.
