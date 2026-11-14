@@ -235,6 +235,7 @@ impl PluginRuntime {
             task_scheduler: Arc::clone(&self.task_scheduler),
             fail_closed: std::sync::OnceLock::new(),
             packet_ids: std::sync::OnceLock::new(),
+            trapped: std::sync::atomic::AtomicBool::new(false),
         });
         let weak_plugin = Arc::downgrade(&wasm_plugin);
         wasm_plugin

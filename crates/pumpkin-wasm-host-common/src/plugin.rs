@@ -1,7 +1,10 @@
 use pumpkin_core::plugin::api::events::server::packet::PacketReceivedEvent;
 use std::{
     any::Any,
-    sync::{Arc, OnceLock},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 use thiserror::Error;
 
@@ -237,6 +240,14 @@ pub struct WasmPlugin {
     pub fail_closed: OnceLock<String>,
     /// The `packet_ids` override: ids of the received packets this plugin's handlers get.
     pub packet_ids: OnceLock<Vec<i32>>,
+    /// Set once the guest traps. Its instance is unusable afterwards, so the host stops calling it.
+    pub trapped: AtomicBool,
+}
+
+/// Whether `error` comes from the guest trapping (including running out of memory).
+#[must_use]
+pub fn is_trap(error: &wasmtime::Error) -> bool {
+    error.downcast_ref::<wasmtime::Trap>().is_some()
 }
 
 /// Whether a received packet with id `packet_id` is filtered out by a `packet_ids` override.
@@ -246,6 +257,16 @@ pub fn packet_filtered_out(packet_ids: Option<&[i32]>, packet_id: i32) -> bool {
 }
 
 impl WasmPlugin {
+    #[must_use]
+    pub fn is_trapped(&self) -> bool {
+        self.trapped.load(Ordering::Acquire)
+    }
+
+    /// Records a failed guest call. Returns true the first time the plugin is seen trapping.
+    pub fn note_failure(&self, error: &wasmtime::Error) -> bool {
+        is_trap(error) && !self.trapped.swap(true, Ordering::AcqRel)
+    }
+
     /// Whether this plugin's handlers skip `event`: a received packet outside its `packet_ids`.
     #[must_use]
     pub fn skips_event(&self, event: &dyn Any) -> bool {
@@ -281,6 +302,14 @@ mod tests {
     };
 
     use super::{is_wasi_p3_import, packet_filtered_out, scan_component_names};
+
+    #[test]
+    fn only_traps_count_as_trapped() {
+        assert!(super::is_trap(&wasmtime::Error::from(
+            wasmtime::Trap::UnreachableCodeReached
+        )));
+        assert!(!super::is_trap(&wasmtime::Error::msg("host call failed")));
+    }
 
     #[test]
     fn packet_ids_override_filters_other_packets() {

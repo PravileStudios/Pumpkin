@@ -20,6 +20,10 @@ pub fn tick(scheduler: &TaskScheduler, server: &Arc<Server>) {
 }
 
 fn run_task(server: &Arc<Server>, task: &ScheduledTask) {
+    if task.plugin.is_trapped() {
+        task.plugin.task_scheduler.disable_plugin(&task.plugin);
+        return;
+    }
     let plugin = task.plugin.clone();
     let handler_id = task.handler_id;
     let server_clone = server.clone();
@@ -76,7 +80,16 @@ fn run_task(server: &Arc<Server>, task: &ScheduledTask) {
             })
             .await
         {
-            tracing::error!(handler_id, %error, "Wasm scheduled task failed");
+            if plugin.note_failure(&error) {
+                plugin.task_scheduler.disable_plugin(&plugin);
+                tracing::error!(
+                    handler_id,
+                    %error,
+                    "Wasm plugin trapped; its scheduled tasks and event handlers are stopped"
+                );
+            } else if !plugin.is_trapped() {
+                tracing::error!(handler_id, %error, "Wasm scheduled task failed");
+            }
         }
     });
 }

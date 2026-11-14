@@ -319,9 +319,26 @@ impl<E: Payload + ToFromWasmEvent + Clone + 'static> EventHandler<E> for WasmPlu
             if self.plugin.skips_event(event.as_any()) {
                 return;
             }
+            if self.plugin.is_trapped() {
+                if let Some(plugin) = self.plugin.fail_closed.get()
+                    && let Some(player) = fail_closed::player_to_disconnect(event)
+                {
+                    fail_closed::disconnect(&player, plugin);
+                }
+                return;
+            }
             let pending = Box::new(NotifiedEvent(event.clone()));
             if let Err(error) = self.dispatch(server.clone(), pending).await {
-                tracing::error!(handler_id = self.handler_id, %error, "Wasm event handler failed");
+                if self.plugin.note_failure(&error) {
+                    self.plugin.task_scheduler.disable_plugin(&self.plugin);
+                    tracing::error!(
+                        handler_id = self.handler_id,
+                        %error,
+                        "Wasm plugin trapped; its scheduled tasks and event handlers are stopped"
+                    );
+                } else {
+                    tracing::error!(handler_id = self.handler_id, %error, "Wasm event handler failed");
+                }
                 if let Some(plugin) = self.plugin.fail_closed.get()
                     && let Some(player) = fail_closed::player_to_disconnect(event)
                 {
@@ -340,6 +357,14 @@ impl<E: Payload + ToFromWasmEvent + Clone + 'static> EventHandler<E> for WasmPlu
             if self.plugin.skips_event(event.as_any()) {
                 return;
             }
+            if self.plugin.is_trapped() {
+                if let Some(plugin) = self.plugin.fail_closed.get()
+                    && let Some(player) = fail_closed::contain(event)
+                {
+                    fail_closed::disconnect(&player, plugin);
+                }
+                return;
+            }
             let pending = Box::new(BlockingEvent(event.clone()));
             match self.dispatch(server.clone(), pending).await {
                 Ok(updated_event) => {
@@ -348,11 +373,20 @@ impl<E: Payload + ToFromWasmEvent + Clone + 'static> EventHandler<E> for WasmPlu
                     }
                 }
                 Err(error) => {
-                    tracing::error!(
-                        handler_id = self.handler_id,
-                        %error,
-                        "Blocking Wasm event handler failed"
-                    );
+                    if self.plugin.note_failure(&error) {
+                        self.plugin.task_scheduler.disable_plugin(&self.plugin);
+                        tracing::error!(
+                            handler_id = self.handler_id,
+                            %error,
+                            "Wasm plugin trapped; its scheduled tasks and event handlers are stopped"
+                        );
+                    } else {
+                        tracing::error!(
+                            handler_id = self.handler_id,
+                            %error,
+                            "Blocking Wasm event handler failed"
+                        );
+                    }
                     if let Some(plugin) = self.plugin.fail_closed.get()
                         && let Some(player) = fail_closed::contain(event)
                     {
