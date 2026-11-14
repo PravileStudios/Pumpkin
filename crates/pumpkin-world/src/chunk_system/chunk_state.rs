@@ -6,7 +6,9 @@ use crate::generation::biome_coords;
 use crate::tick::scheduler::ChunkTickScheduler;
 use pumpkin_config::lighting::LightingEngineConfig;
 use pumpkin_data::BlockStateId;
+use pumpkin_data::block_properties::BLOCK_ENTITY_TYPES;
 use pumpkin_data::dimension::Dimension;
+use pumpkin_util::math::position::BlockPos;
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64};
@@ -316,10 +318,20 @@ impl Chunk {
                 && let Some(y) = nbt.get_int("y")
                 && let Some(z) = nbt.get_int("z")
             {
-                pending_block_entities
-                    .insert(pumpkin_util::math::position::BlockPos::new(x, y, z), nbt);
+                pending_block_entities.insert(BlockPos::new(x, y, z), nbt);
             }
         }
+
+        add_default_block_entities(
+            &sections
+                .block_sections
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            proto_chunk.x,
+            proto_chunk.z,
+            dimension.min_y,
+            &mut pending_block_entities,
+        );
 
         let chunk = ChunkData {
             light_engine: Mutex::new(light_data),
@@ -342,9 +354,96 @@ impl Chunk {
     }
 }
 
+const fn bears_block_entity(state: BlockStateId) -> bool {
+    state.to_state().block_entity_type != u16::MAX
+}
+
+pub fn add_default_block_entities<S: std::hash::BuildHasher>(
+    block_sections: &[BlockPalette],
+    chunk_x: i32,
+    chunk_z: i32,
+    min_y: i32,
+    pending: &mut std::collections::HashMap<BlockPos, NbtCompound, S>,
+) -> usize {
+    let mut added = 0;
+    for (index, palette) in block_sections.iter().enumerate() {
+        if !palette.contains_matching(bears_block_entity) {
+            continue;
+        }
+        let base_y = min_y + (index * BlockPalette::SIZE) as i32;
+        for y in 0..BlockPalette::SIZE {
+            for z in 0..BlockPalette::SIZE {
+                for x in 0..BlockPalette::SIZE {
+                    let state = palette.get(x, y, z).to_state();
+                    let Some(name) = BLOCK_ENTITY_TYPES.get(state.block_entity_type as usize)
+                    else {
+                        continue;
+                    };
+                    let pos = BlockPos::new(
+                        chunk_x * 16 + x as i32,
+                        base_y + y as i32,
+                        chunk_z * 16 + z as i32,
+                    );
+                    pending.entry(pos).or_insert_with(|| {
+                        added += 1;
+                        let mut nbt = NbtCompound::new();
+                        nbt.put_string("id", format!("minecraft:{name}"));
+                        nbt.put_int("x", pos.0.x);
+                        nbt.put_int("y", pos.0.y);
+                        nbt.put_int("z", pos.0.z);
+                        nbt
+                    });
+                }
+            }
+        }
+    }
+    added
+}
+
 #[cfg(test)]
 mod tests {
     use super::StagedChunkEnum;
+    use super::{BlockPalette, BlockPos, FxHashMap, NbtCompound, add_default_block_entities};
+    use pumpkin_data::Block;
+
+    #[test]
+    fn default_block_entities_fill_only_missing_positions() {
+        let mut sections = vec![BlockPalette::Homogeneous(Block::STONE.default_state.id); 4];
+        sections[2] = BlockPalette::from_fn(|x, y, z| match (x, y, z) {
+            (3, 5, 7) => Block::CHEST.default_state.id,
+            (0, 0, 0) => Block::WHITE_SHULKER_BOX.default_state.id,
+            (15, 15, 15) => Block::OAK_SIGN.default_state.id,
+            _ => Block::AIR.default_state.id,
+        });
+        let mut pending = FxHashMap::default();
+        let supplied = BlockPos::new(16 * 2 + 15, -64 + 32 + 15, -16 + 15);
+        let mut sign = NbtCompound::new();
+        sign.put_string("id", "minecraft:sign".to_string());
+        sign.put_string("marker", "kept".to_string());
+        pending.insert(supplied, sign);
+
+        let added = add_default_block_entities(&sections, 2, -1, -64, &mut pending);
+
+        assert_eq!(added, 2);
+        assert_eq!(pending.len(), 3);
+        let chest = &pending[&BlockPos::new(32 + 3, -64 + 32 + 5, -16 + 7)];
+        assert_eq!(chest.get_string("id"), Some("minecraft:chest"));
+        assert_eq!(chest.get_int("y"), Some(-27));
+        let shulker = &pending[&BlockPos::new(32, -32, -16)];
+        assert_eq!(shulker.get_string("id"), Some("minecraft:shulker_box"));
+        assert_eq!(pending[&supplied].get_string("marker"), Some("kept"));
+    }
+
+    #[test]
+    fn default_block_entities_skip_plain_sections() {
+        let sections = vec![BlockPalette::Homogeneous(Block::STONE.default_state.id); 24];
+        let mut pending = FxHashMap::default();
+        assert_eq!(
+            add_default_block_entities(&sections, 0, 0, -64, &mut pending),
+            0
+        );
+        assert!(pending.is_empty());
+    }
 
     #[test]
     fn surface_reads_neighbor_biomes_without_owning_neighbors() {
