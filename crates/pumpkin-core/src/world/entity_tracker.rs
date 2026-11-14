@@ -7,6 +7,7 @@ use std::sync::{Arc, RwLock};
 use bytes::BufMut;
 use crossbeam::atomic::AtomicCell;
 use dashmap::DashMap;
+use pumpkin_data::data_component_impl::EquipmentSlot;
 use pumpkin_data::entity::EntityType;
 use pumpkin_data::packet::CURRENT_MC_VERSION;
 use pumpkin_protocol::bedrock::client::CSetActorMotion;
@@ -671,20 +672,30 @@ impl TrackedEntity {
         }
 
         if let Some(living) = self.entity.get_living_entity() {
+            let held = self
+                .entity
+                .get_player()
+                .map(|target| target.inventory.held_item());
             if let Ok(equipment_guard) = living.entity_equipment.try_lock() {
-                let mut equipment_list = Vec::new();
-                for (slot, item_stack) in &equipment_guard.equipment {
-                    if !item_stack.is_empty() {
-                        equipment_list.push((slot.discriminant(), item_stack.clone()));
-                    }
-                }
+                let equipment_list = pairing_equipment(
+                    equipment_guard
+                        .equipment
+                        .iter()
+                        .map(|(slot, stack)| (slot.clone(), stack.clone())),
+                    &EquipmentSlot::MAIN_HAND,
+                    held,
+                    pumpkin_data::item_stack::ItemStack::is_empty,
+                );
                 if !equipment_list.is_empty() {
                     match player.client.as_ref() {
                         ClientPlatform::Java(client) => {
                             let equipment: Vec<(i8, ItemStackSerializer)> = equipment_list
                                 .iter()
                                 .map(|(slot, stack)| {
-                                    (*slot, ItemStackSerializer::from(stack.clone()))
+                                    (
+                                        slot.discriminant(),
+                                        ItemStackSerializer::from(stack.clone()),
+                                    )
                                 })
                                 .collect();
                             let packet = CSetEquipment::new(self.entity_id.into(), equipment);
@@ -693,7 +704,6 @@ impl TrackedEntity {
                             }
                         }
                         ClientPlatform::Bedrock(client) => {
-                            use pumpkin_data::data_component_impl::EquipmentSlot;
                             use pumpkin_protocol::bedrock::{
                                 client::{
                                     mob_armor_equipment::CMobArmorEquipment,
@@ -702,9 +712,9 @@ impl TrackedEntity {
                                 network_item::NetworkItemStackDescriptor,
                             };
 
-                            if let Some(main_hand) =
-                                equipment_guard.equipment.get(&EquipmentSlot::MAIN_HAND)
-                                && !main_hand.is_empty()
+                            if let Some((_, main_hand)) = equipment_list
+                                .iter()
+                                .find(|(slot, _)| *slot == EquipmentSlot::MAIN_HAND)
                             {
                                 let pkt = CMobEquipment {
                                     target_runtime_id: (self.entity_id as u64).into(),
@@ -1337,5 +1347,49 @@ impl EntityTracker {
                 tracked.entity.get_entity().send_dirty_entity_data();
             }
         });
+    }
+}
+
+fn pairing_equipment<S: PartialEq + Clone, I>(
+    stored: impl IntoIterator<Item = (S, I)>,
+    main_hand: &S,
+    held: Option<I>,
+    is_empty: impl Fn(&I) -> bool,
+) -> Vec<(S, I)> {
+    let replace_main = held.is_some();
+    let mut out: Vec<(S, I)> = stored
+        .into_iter()
+        .filter(|(slot, stack)| !is_empty(stack) && (!replace_main || slot != main_hand))
+        .collect();
+    if let Some(stack) = held.filter(|stack| !is_empty(stack)) {
+        out.push((main_hand.clone(), stack));
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pairing_equipment;
+
+    fn empty(item: &&str) -> bool {
+        item.is_empty()
+    }
+
+    #[test]
+    fn pairing_sends_the_held_item_of_players() {
+        let stored = vec![("main", "stale"), ("head", "helmet"), ("feet", "")];
+        let out = pairing_equipment(stored, &"main", Some("sword"), empty);
+        assert_eq!(out, vec![("head", "helmet"), ("main", "sword")]);
+    }
+
+    #[test]
+    fn pairing_keeps_stored_gear_without_a_held_item() {
+        let stored = vec![("main", "axe"), ("chest", "")];
+        assert_eq!(
+            pairing_equipment(stored, &"main", None, empty),
+            vec![("main", "axe")]
+        );
+        let stored = vec![("main", "old")];
+        assert!(pairing_equipment(stored, &"main", Some(""), empty).is_empty());
     }
 }
