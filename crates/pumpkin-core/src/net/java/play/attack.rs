@@ -41,6 +41,17 @@ impl JavaClient {
         if !player.can_interact_with_entity(target.as_ref(), 1.0) {
             return;
         }
+        let mut event = PlayerInteractEntityEvent::new(
+            player,
+            Arc::clone(&target),
+            ActionType::Attack,
+            None,
+            player_entity.is_sneaking(),
+        );
+        server.plugin_manager.fire_blocking(server, &mut event);
+        if event.cancelled {
+            return;
+        }
         if let Some(player_victim) = &player_target {
             if player_victim.living_entity.health.load() <= 0.0 {
                 return;
