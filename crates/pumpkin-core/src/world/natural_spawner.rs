@@ -439,6 +439,9 @@ impl SpawnState {
         let local_mob_cap = LocalMobCapCalculator::for_world(world);
         let counter = MobCounts::default();
         for entity in entities.load().iter() {
+            if entity.get_entity().is_decor_frozen() {
+                continue;
+            }
             if let Some(mob) = entity.get_mob()
                 && (mob.get_mob_entity().persistence_required.load(Relaxed)
                     || mob.requires_custom_persistence())

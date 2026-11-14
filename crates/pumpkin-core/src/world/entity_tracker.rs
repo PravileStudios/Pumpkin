@@ -1,5 +1,5 @@
 use std::sync::atomic::{
-    AtomicBool, AtomicU32,
+    AtomicBool, AtomicU32, AtomicU64,
     Ordering::{self, Relaxed},
 };
 use std::sync::{Arc, RwLock};
@@ -1141,6 +1141,8 @@ impl TrackedEntity {
 
 pub struct EntityTracker {
     pub entity_map: DashMap<i32, Arc<TrackedEntity>>,
+    map_version: AtomicU64,
+    snapshot: std::sync::Mutex<(u64, Arc<[Arc<TrackedEntity>]>)>,
 }
 
 impl Default for EntityTracker {
@@ -1154,6 +1156,8 @@ impl EntityTracker {
     pub fn new() -> Self {
         Self {
             entity_map: DashMap::new(),
+            map_version: AtomicU64::new(0),
+            snapshot: std::sync::Mutex::new((u64::MAX, Arc::from(Vec::new()))),
         }
     }
 
@@ -1203,6 +1207,7 @@ impl EntityTracker {
             track_deltas,
         ));
         self.entity_map.insert(entity_id, tracked.clone());
+        self.map_version.fetch_add(1, Ordering::AcqRel);
 
         let players = world.players.load();
         tracked.update_players(players.as_ref(), world);
@@ -1221,6 +1226,7 @@ impl EntityTracker {
     /// Vanilla `PlayerList.respawn` -> viewers drop the dead entity, then spawn it fresh.
     pub fn respawn_entity(&self, entity: &Arc<dyn EntityBase>, world: &World) {
         if let Some((_, tracked)) = self.entity_map.remove(&entity.get_entity().entity_id) {
+            self.map_version.fetch_add(1, Ordering::AcqRel);
             tracked.broadcast_removed(world);
         }
         self.add_entity(entity, world);
@@ -1267,6 +1273,7 @@ impl EntityTracker {
         }
 
         if let Some((_, tracked)) = self.entity_map.remove(&entity_id) {
+            self.map_version.fetch_add(1, Ordering::AcqRel);
             tracked.broadcast_removed(world);
         }
     }
@@ -1287,6 +1294,23 @@ impl EntityTracker {
         }
     }
 
+    fn tracked_snapshot(&self) -> Arc<[Arc<TrackedEntity>]> {
+        let version = self.map_version.load(Ordering::Acquire);
+        let mut snapshot = self
+            .snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if snapshot.0 != version {
+            let entities: Vec<_> = self
+                .entity_map
+                .iter()
+                .map(|entry| entry.value().clone())
+                .collect();
+            *snapshot = (version, Arc::from(entities));
+        }
+        snapshot.1.clone()
+    }
+
     pub fn update_all(&self, world: &World) {
         let players = world.players.load();
         let all_snapshots: Vec<PlayerViewSnapshot<'_>> = players
@@ -1303,17 +1327,16 @@ impl EntityTracker {
             })
             .collect();
 
-        let tracked_entities: Vec<Arc<TrackedEntity>> = self
-            .entity_map
-            .iter()
-            .map(|entry| entry.value().clone())
-            .collect();
+        let tracked_entities = self.tracked_snapshot();
 
         let mut entity_moved = vec![false; tracked_entities.len()];
         let moved_player_ids: FxHashSet<i32> = tracked_entities
             .par_iter()
             .zip(entity_moved.par_iter_mut())
             .filter_map(|(tracked, moved_slot)| {
+                if tracked.entity.get_entity().is_decor_frozen() {
+                    return None;
+                }
                 let new_pos = chunk_section_from_pos(&tracked.entity.get_entity().block_pos.load());
                 let old_pos = tracked.last_section_pos.load();
                 let section_changed = old_pos != new_pos;
