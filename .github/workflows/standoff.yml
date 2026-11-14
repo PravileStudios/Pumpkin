@@ -4,6 +4,11 @@ on:
   push:
     branches: [standoff]
   workflow_dispatch:
+    inputs:
+      debug:
+        description: CARGO_PROFILE_PROD_DEBUG value
+        required: false
+        default: "false"
 
 permissions:
   contents: write
@@ -14,6 +19,7 @@ jobs:
     timeout-minutes: 180
     env:
       RUSTFLAGS: -C target-cpu=x86-64-v3
+      CARGO_PROFILE_PROD_DEBUG: ${{ inputs.debug || 'false' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -41,6 +47,7 @@ jobs:
           compression-level: 9
 
       - name: Publish release
+        if: github.ref == 'refs/heads/standoff'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
