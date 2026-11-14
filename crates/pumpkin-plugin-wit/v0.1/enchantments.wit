@@ -1,4 +1,4 @@
-package pumpkin:plugin@0.1.0;
+package pumpkin:plugin@0.1.1;
 
 interface enchantments {
   use text.{text-component};

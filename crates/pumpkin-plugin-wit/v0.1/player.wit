@@ -1164,6 +1164,11 @@ interface player {
         set-skin: func(skin: player-skin);
 
         /// Re-sends the player's profile so viewers and the player itself see the current skin.
+        /// Each call re-sends the tab-list entry, the entity and the player's own view, so callers
+        /// must rate-limit it. The host runs at most one refresh per player per second and merges
+        /// extra calls into one; the player's own view waits while a screen is open or the client
+        /// is still loading.
+        @since(version = 0.1.1)
         refresh-skin: func();
 
         /// Returns which skin parts are visible.
